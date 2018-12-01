@@ -1240,7 +1240,8 @@ extern "C" int Captury_startStreamingImages(int what, int32_t camId)
 	CapturyStreamPacket* packet = new CapturyStreamPacket();
 	packet->type = capturyStream;
 	packet->size = sizeof(CapturyStreamPacket);
-	what |= CAPTURY_STREAM_IMAGES;
+	if (camId != -1) // only stream images if a camera is specified
+		what |= CAPTURY_STREAM_IMAGES;
 	if ((what & CAPTURY_STREAM_LOCAL_POSES) == CAPTURY_STREAM_LOCAL_POSES) {
 		getLocalPoses = true;
 		what &= ~(CAPTURY_STREAM_LOCAL_POSES ^ CAPTURY_STREAM_GLOBAL_POSES);
