@@ -678,7 +678,13 @@ static void* streamLoop(void* arg)
 			continue;
 		}
 		if (size == -1) { // error
-			lastErrorMessage = "Stream socket error";
+			char buf[200];
+			#ifdef WIN32
+			sprintf(buf, "Stream socket error: %d", WSAGetLastError());
+			#else
+			sprintf(buf, "Stream socket error: %s", strerror(errno));
+			#endif
+			lastErrorMessage = buf;
 			break;
 		}
 
