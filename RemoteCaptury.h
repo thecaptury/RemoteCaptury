@@ -47,13 +47,13 @@ CAPTURY_DLL_EXPORT int Captury_getCameras(const CapturyCamera** cameras);
 
 
 #define CAPTURY_STREAM_NOTHING		0x00
-#define CAPTURY_STREAM_POSES		0x11
-#define CAPTURY_STREAM_GLOBAL_POSES	0x11
-#define CAPTURY_STREAM_LOCAL_POSES	0x13
+#define CAPTURY_STREAM_POSES		0x01
+#define CAPTURY_STREAM_GLOBAL_POSES	0x01
+#define CAPTURY_STREAM_LOCAL_POSES	0x03
 #define CAPTURY_STREAM_ARTAGS		0x04
 #define CAPTURY_STREAM_IMAGES		0x08
 
-// do not use directly
+// only valid when streaming poses
 #define CAPTURY_STREAM_META_DATA	0x10
 
 // get the last error message
