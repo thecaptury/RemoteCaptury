@@ -322,8 +322,10 @@ typedef enum { capturyActors = 1, capturyActor = 2,
 	       capturyGetStreamedImageData = 47, capturyRescaleActor = 48, capturyRecolorActor = 49,
 	       capturyRescaleActorAck = 50, capturyRecolorActorAck = 51,
 	       capturyStartTracking = 52, capturyStartTrackingAck = 53,
-	       capturyPose2 = 54, capturyGetStatus = 55, capturyStatus = 56,
+	       capturyPose2 = 54,
+	       capturyGetStatus = 55, capturyStatus = 56,
 	       capturyUpdateActorColors = 57,
+	       capturyPoseCont = 58,
 	       capturyError = 0 } CapturyPacketTypes;
 
 // returns a string for nicer error messages
@@ -464,6 +466,15 @@ struct CapturyPosePacket2 {
 	uint8_t		scalingProgress; // [0 .. 100]
 	uint16_t	reserved;  // 0 for now
 	int32_t		numValues; // multiple of 6
+	float		values[];
+};
+
+struct CapturyPoseCont {
+	int32_t		type;	// capturyPoseCont
+	int32_t		size;	// size of full message including type and size
+
+	int32_t		actor;
+	uint64_t	timestamp;
 	float		values[];
 };
 
