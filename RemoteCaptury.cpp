@@ -408,7 +408,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 				expect = capturyActorContinued;
 				numRetries += 1;
 			}
-			printf("received actor %d (%d/%d), missing %d\n", actor.id, numTransmittedJoints, actor.numJoints, packetsMissing);
+			//printf("received actor %d (%d/%d), missing %d\n", actor.id, numTransmittedJoints, actor.numJoints, packetsMissing);
 			if (numTransmittedJoints == actor.numJoints) {
 				lockMutex(&mutex);
 				newActors.push_back(actor);
@@ -443,7 +443,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 					numRetries += 1;
 					packetsMissing += 1;
 				}
-				printf("received actor %d (%d/%d), missing %d\n", actor.id, j, actor.numJoints, packetsMissing);
+				//printf("received actor %d (%d/%d), missing %d\n", actor.id, j, actor.numJoints, packetsMissing);
 				break;
 			}
 			break; }
