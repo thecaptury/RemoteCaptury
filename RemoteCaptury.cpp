@@ -405,6 +405,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 				expect = capturyActorContinued;
 				numRetries += 1;
 			}
+			printf("received actor %d (%d/%d), missing %d\n", actor.id, numTransmittedJoints, actor.numJoints, packetsMissing);
 			if (numTransmittedJoints == actor.numJoints) {
 				lockMutex(&mutex);
 				newActors.push_back(actor);
@@ -434,7 +435,12 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 					newActors.push_back(actor);
 					unlockMutex(&mutex);
 					partialActors.erase(partialActors.begin() + i);
+				} else {
+					expect = capturyActorContinued;
+					numRetries += 1;
+					packetsMissing += 1;
 				}
+				printf("received actor %d (%d/%d), missing %d\n", actor.id, j, actor.numJoints, packetsMissing);
 				break;
 			}
 			break; }
@@ -667,7 +673,7 @@ static void* streamLoop(void* arg)
 			continue;
 		}
 
-		char buf[1500];
+		char buf[10000];
 		CapturyPosePacket* cpp = (CapturyPosePacket*)&buf[0];
 
 		// first peek to find out which packet type this is
@@ -1294,8 +1300,10 @@ extern "C" CapturyPose* Captury_getCurrentPoseForActor(const CapturyActor* actor
 
 extern "C" CapturyPose* Captury_getCurrentPoseAndTrackingConsistencyForActor(const CapturyActor* actor, int* tc)
 {
-	if (actor == NULL)
+	if (actor == NULL) {
+		lastErrorMessage = "argument \"actor\" is null";
 		return 0;
+	}
 
 	uint64_t now = getTime() - 500000; // half a second ago
 	bool stillCurrent = true;
@@ -1311,8 +1319,10 @@ extern "C" CapturyPose* Captury_getCurrentPoseAndTrackingConsistencyForActor(con
 				stillCurrent = false;
 		}
 	}
-	if (!stillCurrent)
+	if (!stillCurrent) {
+		lastErrorMessage = "actor has disappeared";
 		return NULL;
+	}
 
 //	uint64_t now = getTime();
 	lockMutex(&mutex);
@@ -1331,6 +1341,7 @@ extern "C" CapturyPose* Captury_getCurrentPoseAndTrackingConsistencyForActor(con
 
 	if (it->second.currentPose.numTransforms == 0) {
 		unlockMutex(&mutex);
+		lastErrorMessage = "most recent pose is empty";
 		return 0;
 	}
 
@@ -1349,15 +1360,15 @@ extern "C" CapturyPose* Captury_getCurrentPoseAndTrackingConsistencyForActor(con
 extern "C" CapturyPose* Captury_getCurrentPose(int actorId)
 {
 	lockMutex(&mutex);
-	for (int i = 0; i < (int)actors.size(); ++i) {
-		if (actors[i].id == actorId) {
-			unlockMutex(&mutex);
-			return Captury_getCurrentPoseForActor(&actors[i]);
-		}
+	auto it = actorsById.find(actorId);
+	if (it == actorsById.end()) {
+		unlockMutex(&mutex);
+		lastErrorMessage = "actor was not found";
+		return NULL;
 	}
 	unlockMutex(&mutex);
+	return Captury_getCurrentPoseForActor(it->second);
 
-	return NULL;
 }
 
 extern "C" CapturyPose* Captury_getCurrentPoseAndTrackingConsistency(int actorId, int* tc)
