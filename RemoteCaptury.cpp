@@ -2071,7 +2071,7 @@ void Captury_convertPoseToLocal(CapturyPose* pose, const CapturyActor* actor)
 // 		transformationMatrix(out+3, at, test);
 // 		dumpMatrix(&matrices[i*16]);
 // 		dumpMatrix(test);
-		if (actor->joints[i].parent == -1) { // copy global pose for root joint
+		if (i == 0 || actor->joints[i].parent == -1) { // copy global pose for root joint
 			; // nothing to be done here - the values stay the same
 		} else {
 			float inv[16];
