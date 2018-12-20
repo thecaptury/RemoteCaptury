@@ -265,6 +265,8 @@ const char* Captury_getHumanReadableMessageType(CapturyPacketTypes type)
 		return "<rescale actor>";
 	case capturyRecolorActor:
 		return "<recolor actor>";
+	case capturyUpdateActorColors:
+		return "<update actor colors>";
 	case capturyRescaleActorAck:
 		return "<rescale actor ack>";
 	case capturyRecolorActorAck:
@@ -273,12 +275,18 @@ const char* Captury_getHumanReadableMessageType(CapturyPacketTypes type)
 		return "<start tracking>";
 	case capturyStartTrackingAck:
 		return "<start tracking ack>";
+	case capturyPoseCont:
+		return "<pose continued>";
 	case capturyPose2:
 		return "<pose2>";
 	case capturyGetStatus:
 		return "<get status>";
 	case capturyStatus:
 		return "<status>";
+	case capturyActor2:
+		return "<actor2>";
+	case capturyActorContinued2:
+		return "<actor2 continued>";
 	case capturyError:
 		return "<error>";
 	}
@@ -380,14 +388,40 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 			}
 			numRetries += packetsMissing;
 			break; }
-		case capturyActor: {
+		case capturyActor:
+		case capturyActor2: {
 			CapturyActor actor;
 			CapturyActorPacket* cap = (CapturyActorPacket*)&buf[0];
 			strcpy(actor.name, cap->name);
 			actor.id = cap->id;
 			actor.numJoints = cap->numJoints;
 			actor.joints = new CapturyJoint[actor.numJoints];
-			int numTransmittedJoints = std::min<int>((cap->size - sizeof(CapturyActorPacket)) / sizeof(CapturyJointPacket), actor.numJoints);
+			char* at = (char*)cap->joints;
+			char* end = buf + size;
+			bool isActor1 = (p->type == capturyActor);
+
+			int numTransmittedJoints = 0;
+			for (int j = 0; at < end; ++j) {
+				if (isActor1) {
+					CapturyJointPacket* jp = (CapturyJointPacket*)at;
+					for (int x = 0; x < 3; ++x) {
+						actor.joints[j].offset[x] = jp->offset[x];
+						actor.joints[j].orientation[x] = jp->orientation[x];
+					}
+					strcpy(actor.joints[j].name, jp->name);
+					at += sizeof(CapturyJointPacket);
+				} else {
+					CapturyJointPacket2* jp = (CapturyJointPacket2*)at;
+					for (int x = 0; x < 3; ++x) {
+						actor.joints[j].offset[x] = jp->offset[x];
+						actor.joints[j].orientation[x] = jp->orientation[x];
+					}
+					strcpy(actor.joints[j].name, jp->name);
+					at += sizeof(CapturyJointPacket) + strlen(jp->name) + 1;
+				}
+				numTransmittedJoints = j;
+			}
+			/*int numTransmittedJoints = std::min<int>((cap->size - sizeof(CapturyActorPacket)) / sizeof(CapturyJointPacket), actor.numJoints);
 			for (int j = 0; j < numTransmittedJoints; ++j) {
 				strcpy(actor.joints[j].name, cap->joints[j].name);
 				actor.joints[j].parent = cap->joints[j].parent;
@@ -395,7 +429,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 					actor.joints[j].offset[x] = cap->joints[j].offset[x];
 					actor.joints[j].orientation[x] = cap->joints[j].orientation[x];
 				}
-			}
+			}*/
 			for (int j = numTransmittedJoints; j < actor.numJoints; ++j) { // initialize to default values
 				strcpy(actor.joints[j].name, "uninitialized");
 				actor.joints[j].parent = 0;
@@ -405,7 +439,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 				}
 			}
 			if (numTransmittedJoints < actor.numJoints) {
-				expect = capturyActorContinued;
+				expect = isActor1 ? capturyActorContinued : capturyActorContinued2;
 				numRetries += 1;
 			}
 			//printf("received actor %d (%d/%d), missing %d\n", actor.id, numTransmittedJoints, actor.numJoints, packetsMissing);
@@ -416,21 +450,38 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 			} else
 				partialActors.push_back(actor);
 			break; }
-		case capturyActorContinued: {
+		case capturyActorContinued:
+		case capturyActorContinued2: {
+			bool isActor1 = (p->type == capturyActorContinued);
 			CapturyActorContinuedPacket* cacp = (CapturyActorContinuedPacket*)&buf[0];
-			CapturyJointPacket* end = (CapturyJointPacket*)&buf[size];
 			for (int i = 0; i < (int) partialActors.size(); ++i) {
 				if (partialActors[i].id != cacp->id)
 					continue;
 
 				CapturyActor& actor = partialActors[i];
 				int j = cacp->startJoint;
-				for (int k = 0; j < actor.numJoints && &cacp->joints[k] < end; ++j, ++k) {
-					strcpy(actor.joints[j].name, cacp->joints[k].name);
-					actor.joints[j].parent = cacp->joints[k].parent;
-					for (int x = 0; x < 3; ++x) {
-						actor.joints[j].offset[x] = cacp->joints[k].offset[x];
-						actor.joints[j].orientation[x] = cacp->joints[k].orientation[x];
+				if (isActor1) {
+					CapturyJointPacket* end = (CapturyJointPacket*)&buf[size];
+					for (int k = 0; j < actor.numJoints && &cacp->joints[k] < end; ++j, ++k) {
+						strcpy(actor.joints[j].name, cacp->joints[k].name);
+						actor.joints[j].parent = cacp->joints[k].parent;
+						for (int x = 0; x < 3; ++x) {
+							actor.joints[j].offset[x] = cacp->joints[k].offset[x];
+							actor.joints[j].orientation[x] = cacp->joints[k].orientation[x];
+						}
+					}
+				} else {
+					char* at = (char*)cacp->joints;
+					char* end = (char*)&buf[size];
+					for ( ; j < actor.numJoints && at < end; ++j) {
+						CapturyJointPacket2* jp = (CapturyJointPacket2*)at;
+						actor.joints[j].parent = jp->parent;
+						for (int x = 0; x < 3; ++x) {
+							actor.joints[j].offset[x] = jp->offset[x];
+							actor.joints[j].orientation[x] = jp->orientation[x];
+						}
+						strcpy(actor.joints[j].name, jp->name);
+						at += sizeof(CapturyJointPacket) + strlen(jp->name) + 1;
 					}
 				}
 				if (j == actor.numJoints) {
@@ -990,7 +1041,7 @@ static void* streamLoop(void* arg)
 
 		memcpy(copyTo, values, numBytesToCopy);
 
-		if (numBytesToCopy == numValues * sizeof(float))
+		if (numBytesToCopy == numValues * (int)sizeof(float))
 			receivedPose(&it->second.currentPose, actorsById[cpp->actor], &it->second, cpp->timestamp);
 
 	} while (!stopStreamThread);
