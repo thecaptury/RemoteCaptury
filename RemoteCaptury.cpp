@@ -417,7 +417,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 						actor.joints[j].orientation[x] = jp->orientation[x];
 					}
 					strcpy(actor.joints[j].name, jp->name);
-					at += sizeof(CapturyJointPacket) + strlen(jp->name) + 1;
+					at += sizeof(CapturyJointPacket2) + strlen(jp->name) + 1;
 				}
 				numTransmittedJoints = j;
 			}
@@ -481,7 +481,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 							actor.joints[j].orientation[x] = jp->orientation[x];
 						}
 						strcpy(actor.joints[j].name, jp->name);
-						at += sizeof(CapturyJointPacket) + strlen(jp->name) + 1;
+						at += sizeof(CapturyJointPacket2) + strlen(jp->name) + 1;
 					}
 				}
 				if (j == actor.numJoints) {
@@ -490,7 +490,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 					unlockMutex(&mutex);
 					partialActors.erase(partialActors.begin() + i);
 				} else {
-					expect = capturyActorContinued;
+					// expect is already set correctly
 					numRetries += 1;
 					packetsMissing += 1;
 				}
