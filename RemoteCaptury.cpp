@@ -405,7 +405,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 				expect = capturyActorContinued;
 				numRetries += 1;
 			}
-			printf("received actor %d (%d/%d), missing %d\n", actor.id, numTransmittedJoints, actor.numJoints, packetsMissing);
+			printf("received actor %x (%d/%d), missing %d\n", actor.id, numTransmittedJoints, actor.numJoints, packetsMissing);
 			if (numTransmittedJoints == actor.numJoints) {
 				lockMutex(&mutex);
 				newActors.push_back(actor);
@@ -440,7 +440,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 					numRetries += 1;
 					packetsMissing += 1;
 				}
-				printf("received actor %d (%d/%d), missing %d\n", actor.id, j, actor.numJoints, packetsMissing);
+				printf("received actor %x (%d/%d), missing %d\n", actor.id, j, actor.numJoints, packetsMissing);
 				break;
 			}
 			break; }
@@ -512,7 +512,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 			actorData[tp->actor].currentTextures.width = tp->width;
 			actorData[tp->actor].currentTextures.height = tp->height;
 			actorData[tp->actor].currentTextures.timestamp = 0;
-//			printf("got image header %dx%d for actor %d\n", currentTextures[tp->actor].width, currentTextures[tp->actor].height, tp->actor);
+//			printf("got image header %dx%d for actor %x\n", currentTextures[tp->actor].width, currentTextures[tp->actor].height, tp->actor);
 			actorData[tp->actor].currentTextures.data = (unsigned char*)malloc(tp->width*tp->height*3);
 			actorData[tp->actor].receivedPackets = std::vector<int>( ((tp->width*tp->height*3 + tp->dataPacketSize-16-1) / (tp->dataPacketSize-16)), 0);
 			unlockMutex(&mutex);
@@ -702,12 +702,12 @@ static void* streamLoop(void* arg)
 		if (cpp->type == capturyImageData) {
 			// received data for the image
 			CapturyImageDataPacket* cip = (CapturyImageDataPacket*)&buf[0];
-			//printf("received image data for actor %d (payload %d bytes)\n", cip->actor, cip->size-16);
+			//printf("received image data for actor %x (payload %d bytes)\n", cip->actor, cip->size-16);
 
 			// check if we have a texture already
 			std::map<int, ActorData>::iterator it = actorData.find(cip->actor);
 			if (it == actorData.end()) {
-				printf("received image data for actor %d without having received image header\n", cip->actor);
+				printf("received image data for actor %x without having received image header\n", cip->actor);
 				continue;
 			}
 
@@ -718,7 +718,7 @@ static void* streamLoop(void* arg)
 			// check if packet fits
 			if (cip->offset >= imgSize || cip->offset + cip->size-16 > imgSize) {
 				unlockMutex(&mutex);
-				printf("received image data for actor %d (%d-%d) that is larger than header (%dx%d*3 = %d)\n", cip->actor, cip->offset, cip->offset+cip->size-16, it->second.currentTextures.width, it->second.currentTextures.height, imgSize);
+				printf("received image data for actor %x (%d-%d) that is larger than header (%dx%d*3 = %d)\n", cip->actor, cip->offset, cip->offset+cip->size-16, it->second.currentTextures.width, it->second.currentTextures.height, imgSize);
 				continue;
 			}
 
@@ -850,7 +850,7 @@ static void* streamLoop(void* arg)
 
 		if (cpp->type == capturyActorModeChanged) {
 			CapturyActorModeChangedPacket* amc = (CapturyActorModeChangedPacket*)&buf[0];
-			printf("received actorModeChanged packet %d %d\n", amc->actor, amc->mode);
+			printf("received actorModeChanged packet %x %d\n", amc->actor, amc->mode);
 			if (actorChangedCallback != NULL)
 				actorChangedCallback(amc->actor, amc->mode);
 			actorData[amc->actor].status = (CapturyActorStatus)amc->mode;
@@ -864,7 +864,7 @@ static void* streamLoop(void* arg)
 		lockMutex(&mutex);
 		if (actorsById.count(cpp->actor) == 0) {
 			char buf[400];
-			snprintf(buf, 400, "Actor %d does not exist", cpp->actor);
+			snprintf(buf, 400, "Actor %x does not exist", cpp->actor);
 			lastErrorMessage = buf;
 			unlockMutex(&mutex);
 			continue;
@@ -1329,7 +1329,7 @@ extern "C" CapturyPose* Captury_getCurrentPoseAndTrackingConsistencyForActor(con
 	std::map<int, ActorData>::iterator it = actorData.find(actor->id);
 	if (it == actorData.end()) {
 		char buf[400];
-		snprintf(buf, 400, "Requested pose for unknown actor %d, have poses ", actor->id);
+		snprintf(buf, 400, "Requested pose for unknown actor %x, have poses ", actor->id);
 		lastErrorMessage = buf;
 		for (it = actorData.begin(); it != actorData.end(); ++it) {
 			snprintf(buf, 400, "%d ", it->first);
@@ -1363,7 +1363,14 @@ extern "C" CapturyPose* Captury_getCurrentPose(int actorId)
 	auto it = actorsById.find(actorId);
 	if (it == actorsById.end()) {
 		unlockMutex(&mutex);
-		lastErrorMessage = "actor was not found";
+		char buf[20];
+		lastErrorMessage = "actor ";
+		lastErrorMessage += itoa(actorId, buf, 16);
+		lastErrorMessage += "was not found.\nhave ";
+		for (auto it = actorsById.begin(); it != actorsById.end(); ++it) {
+			lastErrorMessage += itoa(it->first, buf, 16);
+			lastErrorMessage += ", ";
+		}
 		return NULL;
 	}
 	unlockMutex(&mutex);
@@ -1430,7 +1437,7 @@ extern "C" int Captury_requestTexture(const CapturyActor* actor)
 	packet.size = sizeof(packet);
 	packet.actor = actor->id;
 
-//	printf("requesting texture for actor %d\n", actor->id);
+//	printf("requesting texture for actor %x\n", actor->id);
 
 	if (!sendPacket((CapturyRequestPacket*)&packet, capturyImageHeader))
 		return 0;
