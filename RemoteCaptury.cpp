@@ -419,7 +419,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 					strcpy(actor.joints[j].name, jp->name);
 					at += sizeof(CapturyJointPacket2) + strlen(jp->name) + 1;
 				}
-				numTransmittedJoints = j;
+				numTransmittedJoints = j + 1;
 			}
 			/*int numTransmittedJoints = std::min<int>((cap->size - sizeof(CapturyActorPacket)) / sizeof(CapturyJointPacket), actor.numJoints);
 			for (int j = 0; j < numTransmittedJoints; ++j) {
@@ -443,6 +443,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 				numRetries += 1;
 			}
 			//printf("received actor %d (%d/%d), missing %d\n", actor.id, numTransmittedJoints, actor.numJoints, packetsMissing);
+			p->type = capturyActor;
 			if (numTransmittedJoints == actor.numJoints) {
 				lockMutex(&mutex);
 				newActors.push_back(actor);
