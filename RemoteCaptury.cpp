@@ -1185,8 +1185,11 @@ extern "C" int Captury_disconnect()
 
 	std::map<int, ActorData>::iterator it;
 	for (it = actorData.begin(); it != actorData.end(); ++it) {
-		if (it->second.currentPose.numTransforms != 0)
+		if (it->second.currentPose.numTransforms != 0) {
 			delete[] it->second.currentPose.transforms;
+			it->second.currentPose.numTransforms = 0; // should not be necessary but weird things do happen
+			it->second.currentPose.transforms = NULL;
+		}
 		if (it->second.currentTextures.data != NULL)
 			free(it->second.currentTextures.data);
 	}
