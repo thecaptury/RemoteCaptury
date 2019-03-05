@@ -52,6 +52,7 @@ CAPTURY_DLL_EXPORT int Captury_getCameras(const CapturyCamera** cameras);
 #define CAPTURY_STREAM_LOCAL_POSES	0x03
 #define CAPTURY_STREAM_ARTAGS		0x04
 #define CAPTURY_STREAM_IMAGES		0x08
+#define CAPTURY_STREAM_IMU_DATA		0x20
 
 // only valid when streaming poses
 #define CAPTURY_STREAM_META_DATA	0x10
@@ -680,6 +681,16 @@ struct CapturyStatusPacket {
 	int32_t		type; // capturyStatus
 	int32_t		size;
 	char		message[1]; // 0-terminated
+};
+
+// sent to client
+// as a reply to CapturyStreamPacket
+struct CapturyIMUData {
+	int32_t		type;	// capturyIMU
+	int32_t		size;	// size of full message including type and size
+
+	uint8_t		numIMUs;
+	float		eulerAngles[]; // 3x numIMUs floats
 };
 
 #pragma pack(pop)
