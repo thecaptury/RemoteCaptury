@@ -1261,7 +1261,10 @@ extern "C" int Captury_getActors(const CapturyActor** actrs)
 extern "C" const CapturyActor* Captury_getActor(int id)
 {
 	if (sock == -1)
-		return 0;
+		return NULL;
+
+	if (id == 0) // invalid id
+		return NULL;
 
 	// if the actor is already known, we don't have to ask the server
 	for (int i = 0; i < (int) actors.size(); ++i) {
