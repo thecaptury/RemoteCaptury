@@ -118,6 +118,7 @@ static CapturyActorChangedCallback actorChangedCallback = NULL;
 static CapturyARTagCallback arTagCallback = NULL;
 static CapturyImageCallback imageCallback = NULL;
 
+static bool		isThreadRunning = false;
 #ifdef WIN32
 static HANDLE		thread;
 static CRITICAL_SECTION	mutex;
@@ -672,7 +673,9 @@ static DWORD WINAPI streamLoop(void* arg)
 static void* streamLoop(void* arg)
 #endif
 {
-	CapturyStreamPacket* packet = (CapturyStreamPacket*) arg;
+	isThreadRunning = true;
+
+	CapturyStreamPacket* packet = (CapturyStreamPacket*)arg;
 
 	SOCKET streamSock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 	if (streamSock == -1) {
@@ -1000,6 +1003,7 @@ static void* streamLoop(void* arg)
 		float* values;
 		int at;
 		if (cpp->type == capturyPose) {
+			// printf("actor %x: %g\n", cpp->actor, cpp->values[0]);
 			numValues = cpp->numValues;
 			values = cpp->values;
 			at = (char*)(cpp->values) - (char*)cpp;
@@ -1046,6 +1050,8 @@ static void* streamLoop(void* arg)
 			receivedPose(&it->second.currentPose, actorsById[cpp->actor], &it->second, cpp->timestamp);
 
 	} while (!stopStreamThread);
+
+	isThreadRunning = false;
 
 	CapturyStreamPacket pkt;
 	pkt.type = capturyStream;
@@ -1177,8 +1183,12 @@ extern "C" int Captury_disconnect()
 	DeleteCriticalSection(&mutex);
 #endif
 
-	for (int i = 0; i < (int) actors.size(); ++i)
-		delete[] actors[i].joints;
+	for (int i = 0; i < (int) actors.size(); ++i) {
+		if (actors[i].joints != nullptr) {
+			delete[] actors[i].joints;
+			actors[i].joints = nullptr;
+		}
+	}
 
 	actors.clear();
 	actorsById.clear();
@@ -1232,8 +1242,12 @@ extern "C" int Captury_getActors(const CapturyActor** actrs)
 	lockMutex(&mutex);
 	// clear list - we are getting a new one now.
 	// stupid C interface requires us to do the cleanup manually
-	for (int i = 0; i < (int) actors.size(); ++i)
-		delete[] actors[i].joints;
+	for (int i = 0; i < (int) actors.size(); ++i) {
+		if (actors[i].joints != nullptr) {
+			delete[] actors[i].joints;
+			actors[i].joints = nullptr;
+		}
+	}
 
 	actors.resize(newActors.size());
 	for (int i = 0; i < (int) actors.size(); ++i)
@@ -1277,13 +1291,17 @@ extern "C" const CapturyActor* Captury_getActor(int id)
 	packet.size = sizeof(packet);
 
 	if (!sendPacket(&packet, capturyActors))
-		return 0;
+		return NULL;
 
 	lockMutex(&mutex);
 	// clear list - we are getting a new one now.
 	// stupid C interface requires us to do the cleanup manually
-	for (int i = 0; i < (int) actors.size(); ++i)
-		delete[] actors[i].joints;
+	for (int i = 0; i < (int)actors.size(); ++i) {
+		if (actors[i].joints != nullptr) {
+			delete[] actors[i].joints;
+			actors[i].joints = nullptr;
+		}
+	}
 
 	actors.resize(newActors.size());
 	for (int i = 0; i < (int) actors.size(); ++i)
@@ -1361,6 +1379,10 @@ extern "C" int Captury_startStreamingImages(int what, int32_t camId)
 
 	if (what == CAPTURY_STREAM_NOTHING)
 		return Captury_stopStreaming();
+
+	if (isThreadRunning) {
+		Captury_stopStreaming();
+	}
 
 	CapturyStreamPacket* packet = new CapturyStreamPacket();
 	packet->type = capturyStream;
