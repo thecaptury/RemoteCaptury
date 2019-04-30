@@ -1,11 +1,11 @@
 cmake_minimum_required(VERSION 2.8)
 
-#if (${OpenMP_C_FLAGS})
+if (OpenMP_C_FLAGS)
 	string(REPLACE ${OpenMP_C_FLAGS} "" CMAKE_C_FLAGS ${CMAKE_C_FLAGS})
-#endif (${OpenMP_C_FLAGS})
-#if (${OpenMP_CXX_FLAGS})
+endif (OpenMP_C_FLAGS)
+if (OpenMP_CXX_FLAGS)
 	string(REPLACE ${OpenMP_CXX_FLAGS} "" CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
-#endif (${OpenMP_CXX_FLAGS})
+endif (OpenMP_CXX_FLAGS)
 
 project(RemoteCaptury)
 message(STATUS "working on remotecaptury library")
