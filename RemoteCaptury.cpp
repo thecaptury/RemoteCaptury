@@ -44,6 +44,11 @@ static std::vector<CapturyActor> actors; // current actors
 static std::vector<CapturyActor> partialActors; // actors that have been received in part
 static std::vector<CapturyActor> newActors; // actors that have just been received
 
+static CapturyLatencyPacket currentLatency;
+static uint64_t receivedPoseTime; // time pose packet was received
+static uint64_t mostRecentPoseReceivedTime; // time pose was received
+static uint64_t mostRecentPoseReceivedTimestamp; // timestamp of that pose
+
 // actor id -> pointer to actor
 static std::map<int, CapturyActor*> actorsById;
 
@@ -288,6 +293,8 @@ const char* Captury_getHumanReadableMessageType(CapturyPacketTypes type)
 		return "<actor2>";
 	case capturyActorContinued2:
 		return "<actor2 continued>";
+	case capturyLatency:
+		return "<latency measurements>";
 	case capturyError:
 		return "<error>";
 	}
@@ -612,6 +619,16 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 			CapturyStatusPacket* sp = (CapturyStatusPacket*)&buf[0];
 			lastStatusMessage = sp->message; // FIXME this is unsafe. assumes that message is 0 terminated.
 			break; }
+		case capturyLatency: {
+			CapturyLatencyPacket* lp = (CapturyLatencyPacket*)&buf[0];
+			lockMutex(&mutex);
+			currentLatency = *lp;
+			if (mostRecentPoseReceivedTimestamp == currentLatency.poseTimestamp)
+				receivedPoseTime = mostRecentPoseReceivedTime;
+			else
+				receivedPoseTime = 0; // most recent one doesn't match
+			unlockMutex(&mutex);
+			break; }
 		case capturyStreamAck:
 		case capturySetShotAck:
 		case capturyStartRecordingAck:
@@ -640,6 +657,10 @@ void receivedPose(CapturyPose* pose, CapturyActor* actor, ActorData* aData, uint
 
 	uint64_t now = getTime();
 	aData->lastPoseTimestamp = now;
+
+	mostRecentPoseReceivedTime = now;
+	mostRecentPoseReceivedTimestamp = timestamp;
+
 	unlockMutex(&mutex);
 
 	if (aData->status != ACTOR_SCALING && aData->status != ACTOR_TRACKING) {
@@ -1388,12 +1409,13 @@ extern "C" int Captury_startStreamingImages(int what, int32_t camId)
 	packet->type = capturyStream;
 	packet->size = sizeof(CapturyStreamPacket);
 	if (camId != -1) // only stream images if a camera is specified
-	what |= CAPTURY_STREAM_IMAGES;
+		what |= CAPTURY_STREAM_IMAGES;
 	if ((what & CAPTURY_STREAM_LOCAL_POSES) == CAPTURY_STREAM_LOCAL_POSES) {
 		getLocalPoses = true;
 		what &= ~(CAPTURY_STREAM_LOCAL_POSES ^ CAPTURY_STREAM_GLOBAL_POSES);
 	} else
 		getLocalPoses = false;
+
 	packet->what = what;
 	packet->cameraId = camId;
 
@@ -2358,4 +2380,21 @@ extern "C" const char* Captury_getStatus()
 
 	return lastStatusMessage.c_str();
 }
+
+extern "C" int Captury_getCurrentLatency(uint64_t* firstImagePacket, uint64_t* optimizationStart, uint64_t* optimizationEnd, uint64_t* sendPacketTime, uint64_t* receivedTime)
+{
+	if (firstImagePacket)
+		*firstImagePacket = currentLatency.firstImagePacket;
+	if (optimizationStart)
+		*optimizationStart = currentLatency.optimizationStart;
+	if (optimizationEnd)
+		*optimizationEnd = currentLatency.optimizationEnd;
+	if (sendPacketTime)
+		*sendPacketTime = currentLatency.sendPacketTime;
+	if (receivedTime)
+		*receivedTime = receivedPoseTime;
+
+	return 1;
+}
+
 #endif

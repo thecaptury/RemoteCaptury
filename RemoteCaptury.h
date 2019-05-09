@@ -53,6 +53,7 @@ CAPTURY_DLL_EXPORT int Captury_getCameras(const CapturyCamera** cameras);
 #define CAPTURY_STREAM_ARTAGS		0x04
 #define CAPTURY_STREAM_IMAGES		0x08
 #define CAPTURY_STREAM_IMU_DATA		0x20
+#define CAPTURY_STREAM_LATENCY_INFO	0x40
 
 // only valid when streaming poses
 #define CAPTURY_STREAM_META_DATA	0x10
@@ -267,6 +268,9 @@ CAPTURY_DLL_EXPORT int Captury_startRecording();
 // returns 1 if successful, 0 otherwise
 CAPTURY_DLL_EXPORT int Captury_stopRecording();
 
+// returns 1 if successful, 0 otherwise
+CAPTURY_DLL_EXPORT int Captury_getCurrentLatency(uint64_t* firstImagePacket, uint64_t* optimizationStart, uint64_t* optimizationEnd, uint64_t* sendPacketTime, uint64_t* receivedPoseTime);
+
 
 typedef void (*CapturyCustomPacketCallback)(int size, const void* data);
 
@@ -328,6 +332,7 @@ typedef enum { capturyActors = 1, capturyActor = 2,
 	       capturyUpdateActorColors = 57,
 	       capturyPoseCont = 58,
 	       capturyActor2 = 59, capturyActorContinued2 = 60,
+	       capturyLatency = 61,
 	       capturyError = 0 } CapturyPacketTypes;
 
 // returns a string for nicer error messages
@@ -691,6 +696,20 @@ struct CapturyIMUData {
 
 	uint8_t		numIMUs;
 	float		eulerAngles[]; // 3x numIMUs floats
+};
+
+// sent to client
+// as a reply to CapturyStreamPacket
+struct CapturyLatencyPacket {
+	int32_t		type;	// capturyLatency
+	int32_t		size;	// size of full message including type and size
+
+	uint64_t	firstImagePacket;
+	uint64_t	optimizationStart;
+	uint64_t	optimizationEnd;
+	uint64_t	sendPacketTime; // right before packet is sent
+
+	uint64_t	poseTimestamp;	// timestamp of corresponding pose
 };
 
 #pragma pack(pop)
