@@ -269,7 +269,7 @@ CAPTURY_DLL_EXPORT int Captury_startRecording();
 CAPTURY_DLL_EXPORT int Captury_stopRecording();
 
 // returns 1 if successful, 0 otherwise
-CAPTURY_DLL_EXPORT int Captury_getCurrentLatency(uint64_t* firstImagePacket, uint64_t* optimizationStart, uint64_t* optimizationEnd, uint64_t* sendPacketTime, uint64_t* receivedPoseTime);
+CAPTURY_DLL_EXPORT int Captury_getCurrentLatency(CapturyLatencyInfo* latencyInfo);
 
 
 typedef void (*CapturyCustomPacketCallback)(int size, const void* data);
@@ -303,15 +303,15 @@ CAPTURY_DLL_EXPORT const char* Captury_getStatus(); // do not free.
 // it is safe to ignore everything below this line
 //
 typedef enum { capturyActors = 1, capturyActor = 2,
-               capturyCameras = 3, capturyCamera = 4,
-               capturyStream = 5, capturyStreamAck = 6, capturyPose = 7,
-               capturyDaySessionShot = 8, capturySetShot = 9, capturySetShotAck = 10,
-               capturyStartRecording = 11, capturyStartRecordingAck = 12,
-               capturyStopRecording = 13, capturyStopRecordingAck = 14,
-               capturyConstraint = 15,
-               capturyGetTime = 16, capturyTime = 17,
+	       capturyCameras = 3, capturyCamera = 4,
+	       capturyStream = 5, capturyStreamAck = 6, capturyPose = 7,
+	       capturyDaySessionShot = 8, capturySetShot = 9, capturySetShotAck = 10,
+	       capturyStartRecording = 11, capturyStartRecordingAck = 12,
+	       capturyStopRecording = 13, capturyStopRecordingAck = 14,
+	       capturyConstraint = 15,
+	       capturyGetTime = 16, capturyTime = 17,
 	       capturyCustom = 18, capturyCustomAck = 19,
-               capturyGetImage = 20, capturyImageHeader = 21, capturyImageData = 22,
+	       capturyGetImage = 20, capturyImageHeader = 21, capturyImageData = 22,
 	       capturyGetImageData = 23,
 	       capturyActorContinued = 24,
 	       capturyGetMarkerTransform = 25, capturyMarkerTransform = 26,

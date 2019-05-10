@@ -46,6 +46,9 @@ static std::vector<CapturyActor> newActors; // actors that have just been receiv
 
 static CapturyLatencyPacket currentLatency;
 static uint64_t receivedPoseTime; // time pose packet was received
+static uint64_t receivedPoseTimestamp; // timestamp of pose that corresponds to the receivedPoseTime
+static uint64_t dataAvailableTime;
+static uint64_t dataReceivedTime;
 static uint64_t mostRecentPoseReceivedTime; // time pose was received
 static uint64_t mostRecentPoseReceivedTimestamp; // timestamp of that pose
 
@@ -549,9 +552,9 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 			uint64_t t = (pongTime - pingTime) / 2 + pingTime;
 			timeOffset = tp->timestamp - t;
 			#ifdef WIN32
-			printf("%llu ts %llu => offset %lld\n", t, tp->timestamp, timeOffset);
+			printf("%llu ts %llu => offset %lld, roundtrip %lld\n", t, tp->timestamp, timeOffset, pongTime - pingTime);
 			#else
-			printf("%lu ts %lu => offset %ld\n", t, tp->timestamp, timeOffset);
+			printf("%lu ts %lu => offset %ld, roundtrip %ld\n", t, tp->timestamp, timeOffset, pongTime - pingTime);
 			#endif
 			break; }
 		case capturyCustom: {
@@ -619,16 +622,6 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 			CapturyStatusPacket* sp = (CapturyStatusPacket*)&buf[0];
 			lastStatusMessage = sp->message; // FIXME this is unsafe. assumes that message is 0 terminated.
 			break; }
-		case capturyLatency: {
-			CapturyLatencyPacket* lp = (CapturyLatencyPacket*)&buf[0];
-			lockMutex(&mutex);
-			currentLatency = *lp;
-			if (mostRecentPoseReceivedTimestamp == currentLatency.poseTimestamp)
-				receivedPoseTime = mostRecentPoseReceivedTime;
-			else
-				receivedPoseTime = 0; // most recent one doesn't match
-			unlockMutex(&mutex);
-			break; }
 		case capturyStreamAck:
 		case capturySetShotAck:
 		case capturyStartRecordingAck:
@@ -658,7 +651,7 @@ void receivedPose(CapturyPose* pose, CapturyActor* actor, ActorData* aData, uint
 	uint64_t now = getTime();
 	aData->lastPoseTimestamp = now;
 
-	mostRecentPoseReceivedTime = now;
+	mostRecentPoseReceivedTime = now + timeOffset;
 	mostRecentPoseReceivedTimestamp = timestamp;
 
 	unlockMutex(&mutex);
@@ -788,6 +781,8 @@ static void* streamLoop(void* arg)
 			continue;
 		}
 
+		dataAvailableTime = getTime() + timeOffset;
+
 		char buf[10000];
 		CapturyPosePacket* cpp = (CapturyPosePacket*)&buf[0];
 
@@ -808,6 +803,8 @@ static void* streamLoop(void* arg)
 			lastErrorMessage = buf;
 			break;
 		}
+
+		dataReceivedTime = getTime() + timeOffset;
 
 		if (cpp->type == capturyStreamAck) {
 			lastHeartbeat = time(nullptr);
@@ -1006,6 +1003,22 @@ static void* streamLoop(void* arg)
 			}
 		}
 
+		if (cpp->type == capturyLatency) {
+			CapturyLatencyPacket* lp = (CapturyLatencyPacket*)&buf[0];
+			lockMutex(&mutex);
+			currentLatency = *lp;
+			if (mostRecentPoseReceivedTimestamp == currentLatency.poseTimestamp) {
+				receivedPoseTime = mostRecentPoseReceivedTime;
+				receivedPoseTimestamp = mostRecentPoseReceivedTimestamp;
+			} else {
+				receivedPoseTime = 0; // most recent one doesn't match
+				receivedPoseTimestamp = 0;
+			}
+			unlockMutex(&mutex);
+			printf("latency received %ld, %ld - %ld, %ld - %ld,%ld,%ld\n", lp->firstImagePacket, lp->optimizationStart, lp->optimizationEnd, lp->sendPacketTime, dataAvailableTime, dataReceivedTime, receivedPoseTime);
+			continue;
+		}
+
 		if (cpp->type != capturyPose && cpp->type != capturyPose2) {
 			printf("stream socket received unrecognized packet %d\n", cpp->type);
 			continue;
@@ -1069,6 +1082,8 @@ static void* streamLoop(void* arg)
 
 		if (numBytesToCopy == numValues * (int)sizeof(float))
 			receivedPose(&it->second.currentPose, actorsById[cpp->actor], &it->second, cpp->timestamp);
+		else
+			unlockMutex(&mutex);
 
 	} while (!stopStreamThread);
 
@@ -2381,18 +2396,17 @@ extern "C" const char* Captury_getStatus()
 	return lastStatusMessage.c_str();
 }
 
-extern "C" int Captury_getCurrentLatency(uint64_t* firstImagePacket, uint64_t* optimizationStart, uint64_t* optimizationEnd, uint64_t* sendPacketTime, uint64_t* receivedTime)
+extern "C" int Captury_getCurrentLatency(CapturyLatencyInfo* latencyInfo)
 {
-	if (firstImagePacket)
-		*firstImagePacket = currentLatency.firstImagePacket;
-	if (optimizationStart)
-		*optimizationStart = currentLatency.optimizationStart;
-	if (optimizationEnd)
-		*optimizationEnd = currentLatency.optimizationEnd;
-	if (sendPacketTime)
-		*sendPacketTime = currentLatency.sendPacketTime;
-	if (receivedTime)
-		*receivedTime = receivedPoseTime;
+	if (latencyInfo == nullptr)
+		return 0;
+
+	latencyInfo->firstImagePacketTime = currentLatency.firstImagePacket;
+	latencyInfo->optimizationStartTime = currentLatency.optimizationStart;
+	latencyInfo->optimizationEndTime = currentLatency.optimizationEnd;
+	latencyInfo->poseSentTime = currentLatency.sendPacketTime;
+	latencyInfo->poseReceivedTime = receivedPoseTime;
+	latencyInfo->timestampOfCorrespondingPose = receivedPoseTimestamp;
 
 	return 1;
 }
