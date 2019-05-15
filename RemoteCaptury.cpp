@@ -641,10 +641,10 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 	return (packetsMissing == 0);
 }
 
-void receivedPose(CapturyPose* pose, CapturyActor* actor, ActorData* aData, uint64_t timestamp)
+void receivedPose(CapturyPose* pose, int actorId, ActorData* aData, uint64_t timestamp)
 {
 	if (getLocalPoses)
-		Captury_convertPoseToLocal(pose, actor);
+		Captury_convertPoseToLocal(pose, actorId);
 
 	pose->timestamp = timestamp;
 
@@ -659,13 +659,13 @@ void receivedPose(CapturyPose* pose, CapturyActor* actor, ActorData* aData, uint
 	if (aData->status != ACTOR_SCALING && aData->status != ACTOR_TRACKING) {
 		aData->status = ACTOR_TRACKING;
 		if (actorChangedCallback)
-			actorChangedCallback(actor->id, ACTOR_TRACKING);
+			actorChangedCallback(actorId, ACTOR_TRACKING);
 	}
 
 	//		printf("updated pose for %d\n", cpp->actor);
 
 	if (newPoseCallback != NULL)
-		newPoseCallback(actor, pose, aData->trackingQuality);
+		newPoseCallback(actorsById[actorId], pose, aData->trackingQuality);
 
 	// mark actors as stopped if no data was received for a while
 	now -= 500000; // half a second ago
@@ -999,7 +999,7 @@ static void* streamLoop(void* arg)
 			it->second.inProgressBytesDone += numBytesToCopy;
 			if (it->second.inProgressBytesDone == totalBytes) {
 				memcpy(it->second.currentPose.transforms, it->second.inProgressPose, totalBytes);
-				receivedPose(&it->second.currentPose, actorsById[cpc->actor], &actorData[cpc->actor], it->second.inProgressTimestamp);
+				receivedPose(&it->second.currentPose, cpc->actor, &actorData[cpc->actor], it->second.inProgressTimestamp);
 			}
 		}
 
@@ -1081,7 +1081,7 @@ static void* streamLoop(void* arg)
 		memcpy(copyTo, values, numBytesToCopy);
 
 		if (numBytesToCopy == numValues * (int)sizeof(float))
-			receivedPose(&it->second.currentPose, actorsById[cpp->actor], &it->second, cpp->timestamp);
+			receivedPose(&it->second.currentPose, cpp->actor, &it->second, cpp->timestamp);
 		else
 			unlockMutex(&mutex);
 
@@ -1316,11 +1316,15 @@ extern "C" const CapturyActor* Captury_getActor(int id)
 	if (id == 0) // invalid id
 		return NULL;
 
+	lockMutex(&mutex);
 	// if the actor is already known, we don't have to ask the server
 	for (int i = 0; i < (int) actors.size(); ++i) {
-		if (actors[i].id == id)
+		if (actors[i].id == id) {
+			unlockMutex(&mutex);
 			return &actors[i];
+		}
 	}
+	unlockMutex(&mutex);
 
 	CapturyRequestPacket packet;
 	packet.type = capturyActors;
@@ -1465,18 +1469,14 @@ extern "C" int Captury_stopStreaming()
 // fills the pose with the current pose for the given actor
 // the client is responsible for providing sufficient space (actor->numJoints*6) in pose->values
 // returns 1 if successful, 0 otherwise
-extern "C" CapturyPose* Captury_getCurrentPoseForActor(const CapturyActor* actor)
+extern "C" CapturyPose* Captury_getCurrentPoseForActor(int actorId)
 {
-	return Captury_getCurrentPoseAndTrackingConsistencyForActor(actor, nullptr);
+	return Captury_getCurrentPoseAndTrackingConsistencyForActor(actorId, nullptr);
 }
 
-extern "C" CapturyPose* Captury_getCurrentPoseAndTrackingConsistencyForActor(const CapturyActor* actor, int* tc)
+extern "C" CapturyPose* Captury_getCurrentPoseAndTrackingConsistencyForActor(int actorId, int* tc)
 {
-	if (actor == NULL) {
-		lastErrorMessage = "argument \"actor\" is null";
-		return 0;
-	}
-
+	// check whether any actor changed status
 	uint64_t now = getTime() - 500000; // half a second ago
 	bool stillCurrent = true;
 	for (std::map<int, ActorData>::iterator it = actorData.begin(); it != actorData.end(); ++it) {
@@ -1487,7 +1487,7 @@ extern "C" CapturyPose* Captury_getCurrentPoseAndTrackingConsistencyForActor(con
 			it->second.status = ACTOR_STOPPED;
 			if (actorChangedCallback)
 				actorChangedCallback(it->first, ACTOR_STOPPED);
-			if (it->first == actor->id)
+			if (it->first == actorId)
 				stillCurrent = false;
 		}
 	}
@@ -1498,10 +1498,10 @@ extern "C" CapturyPose* Captury_getCurrentPoseAndTrackingConsistencyForActor(con
 
 //	uint64_t now = getTime();
 	lockMutex(&mutex);
-	std::map<int, ActorData>::iterator it = actorData.find(actor->id);
+	std::map<int, ActorData>::iterator it = actorData.find(actorId);
 	if (it == actorData.end()) {
 		char buf[400];
-		snprintf(buf, 400, "Requested pose for unknown actor %d, have poses ", actor->id);
+		snprintf(buf, 400, "Requested pose for unknown actor %d, have poses ", actorId);
 		lastErrorMessage = buf;
 		for (it = actorData.begin(); it != actorData.end(); ++it) {
 			snprintf(buf, 400, "%d ", it->first);
@@ -1518,12 +1518,12 @@ extern "C" CapturyPose* Captury_getCurrentPoseAndTrackingConsistencyForActor(con
 	}
 
 	CapturyPose* pose = (CapturyPose*) malloc(sizeof(CapturyPose) + it->second.currentPose.numTransforms * sizeof(float) * 6);
-	pose->actor = actor->id;
+	pose->actor = actorId;
 	pose->timestamp = it->second.currentPose.timestamp;
 	pose->numTransforms = it->second.currentPose.numTransforms;
 	pose->transforms = (CapturyTransform*)&pose[1];
 
-	memcpy(pose->transforms, it->second.currentPose.transforms, sizeof(float) * actor->numJoints*6);
+	memcpy(pose->transforms, it->second.currentPose.transforms, sizeof(float) * pose->numTransforms*6);
 	unlockMutex(&mutex);
 
 	return pose;
@@ -1531,30 +1531,13 @@ extern "C" CapturyPose* Captury_getCurrentPoseAndTrackingConsistencyForActor(con
 
 extern "C" CapturyPose* Captury_getCurrentPose(int actorId)
 {
-	lockMutex(&mutex);
-	auto it = actorsById.find(actorId);
-	if (it == actorsById.end()) {
-		unlockMutex(&mutex);
-		lastErrorMessage = "actor was not found";
-		return NULL;
-	}
-	unlockMutex(&mutex);
-	return Captury_getCurrentPoseForActor(it->second);
-
+	int tc;
+	return Captury_getCurrentPoseAndTrackingConsistencyForActor(actorId, &tc);
 }
 
 extern "C" CapturyPose* Captury_getCurrentPoseAndTrackingConsistency(int actorId, int* tc)
 {
-	lockMutex(&mutex);
-	for (int i = 0; i < (int)actors.size(); ++i) {
-		if (actors[i].id == actorId) {
-			unlockMutex(&mutex);
-			return Captury_getCurrentPoseAndTrackingConsistencyForActor(&actors[i], tc);
-		}
-	}
-	unlockMutex(&mutex);
-
-	return NULL;
+	return Captury_getCurrentPoseAndTrackingConsistencyForActor(actorId, tc);
 }
 
 // simple function for releasing memory of a pose
@@ -1592,15 +1575,15 @@ extern "C" void Captury_freeARTags(CapturyARTag* artags)
 
 // requests an update of the texture for the given actor. non-blocking
 // returns 1 if successful otherwise 0
-extern "C" int Captury_requestTexture(const CapturyActor* actor)
+extern "C" int Captury_requestTexture(int actorId)
 {
-	if (sock == -1 || actor == NULL)
+	if (sock == -1)
 		return 0;
 
 	CapturyGetImagePacket packet;
 	packet.type = capturyGetImage;
 	packet.size = sizeof(packet);
-	packet.actor = actor->id;
+	packet.actor = actorId;
 
 //	printf("requesting texture for actor %d\n", actor->id);
 
@@ -1611,13 +1594,10 @@ extern "C" int Captury_requestTexture(const CapturyActor* actor)
 }
 
 // returns a texture image of the specified actor
-extern "C" CapturyImage* Captury_getTexture(const CapturyActor* actor)
+extern "C" CapturyImage* Captury_getTexture(int actorId)
 {
-	if (actor == NULL)
-		return 0;
-
 	// check if we don't have a texture yet
-	std::map<int, ActorData>::iterator it = actorData.find(actor->id);
+	std::map<int, ActorData>::iterator it = actorData.find(actorId);
 	if (it == actorData.end())
 		return 0;
 
@@ -1647,9 +1627,9 @@ extern "C" void Captury_freeImage(CapturyImage* image)
 
 // requests an update of the texture for the given actor. blocking
 // returns 1 if successful otherwise 0
-extern "C" uint64_t Captury_getMarkerTransform(const CapturyActor* actor, int joint, CapturyTransform* trafo)
+extern "C" uint64_t Captury_getMarkerTransform(int actorId, int joint, CapturyTransform* trafo)
 {
-	if (sock == -1 || actor == NULL)
+	if (sock == -1)
 		return 0;
 
 	if (joint < 0)
@@ -1661,7 +1641,7 @@ extern "C" uint64_t Captury_getMarkerTransform(const CapturyActor* actor, int jo
 	CapturyGetMarkerTransformPacket packet;
 	packet.type = capturyGetMarkerTransform;
 	packet.size = sizeof(packet);
-	packet.actor = actor->id;
+	packet.actor = actorId;
 	packet.joint = joint;
 
 	//printf("requesting marker transform for actor.joint %d.%d\n", actor->id, joint);
@@ -1669,7 +1649,7 @@ extern "C" uint64_t Captury_getMarkerTransform(const CapturyActor* actor, int jo
 	if (!sendPacket((CapturyRequestPacket*)&packet, capturyMarkerTransform))
 		return 0;
 
-	ActorAndJoint aj(actor->id, joint);
+	ActorAndJoint aj(actorId, joint);
 	if (markerTransforms.count(aj) == 0)
 		return 0;
 
@@ -1678,32 +1658,30 @@ extern "C" uint64_t Captury_getMarkerTransform(const CapturyActor* actor, int jo
 	return markerTransforms[aj].timestamp + timeOffset;
 }
 
-extern "C" int Captury_getScalingProgress(const CapturyActor* actor)
+extern "C" int Captury_getScalingProgress(int actorId)
 {
-	if (actor == NULL)
-		return 0;
-
-	return actorData[actor->id].scalingProgress;
+	return actorData[actorId].scalingProgress;
 }
 
-extern "C" int Captury_getTrackingQuality(const CapturyActor* actor)
+extern "C" int Captury_getTrackingQuality(int actorId)
 {
-	if (actor == NULL)
+	auto it = actorData.find(actorId);
+	if (it == actorData.end())
 		return 0;
 
-	return actorData[actor->id].trackingQuality;
+	return it->second.trackingQuality;
 }
 
 // change the name of the actor
-extern "C" int Captury_setActorName(const CapturyActor* actor, const char* name)
+extern "C" int Captury_setActorName(int actorId, const char* name)
 {
-	if (sock == -1 || actor == NULL)
+	if (sock == -1)
 		return 0;
 
 	CapturySetActorNamePacket packet;
 	packet.type = capturySetActorName;
 	packet.size = sizeof(packet);
-	packet.actor = actor->id;
+	packet.actor = actorId;
 	strncpy(packet.name, name, 32);
 	packet.name[31] = '\0';
 
@@ -2174,8 +2152,9 @@ static void decompose(const float* mat, float* euler) // checked
 // 	printf("%.4f %.4f %.4f  %.4f\n", mat[12], mat[13], mat[14], mat[15]);
 // }
 
-void Captury_convertPoseToLocal(CapturyPose* pose, const CapturyActor* actor)
+void Captury_convertPoseToLocal(CapturyPose* pose, int actorId)
 {
+	CapturyActor* actor = actorsById[actorId];
 	CapturyTransform* at = pose->transforms;
 	float* matrices = (float*)malloc(sizeof(float) * 16 * actor->numJoints);
 	for (int i = 0; i < actor->numJoints; ++i, ++at) {

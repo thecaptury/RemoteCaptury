@@ -76,8 +76,8 @@ CAPTURY_DLL_EXPORT int Captury_stopStreaming();
 
 // fills the pose with the current pose for the given actor
 // returns the current pose. free() after use
-CAPTURY_DLL_EXPORT CapturyPose* Captury_getCurrentPoseForActor(const CapturyActor* actor);
-CAPTURY_DLL_EXPORT CapturyPose* Captury_getCurrentPoseAndTrackingConsistencyForActor(const CapturyActor* actor, int* tc);
+CAPTURY_DLL_EXPORT CapturyPose* Captury_getCurrentPoseForActor(int actorId);
+CAPTURY_DLL_EXPORT CapturyPose* Captury_getCurrentPoseAndTrackingConsistencyForActor(int actorId, int* tc);
 CAPTURY_DLL_EXPORT CapturyPose* Captury_getCurrentPose(int actorId);
 CAPTURY_DLL_EXPORT CapturyPose* Captury_getCurrentPoseAndTrackingConsistency(int actorId, int* tc);
 
@@ -129,23 +129,23 @@ CAPTURY_DLL_EXPORT CapturyImage* Captury_getCurrentImage();
 
 // requests an update of the texture for the given actor. non-blocking
 // returns 1 if successful otherwise 0
-CAPTURY_DLL_EXPORT int Captury_requestTexture(const CapturyActor* actor);
+CAPTURY_DLL_EXPORT int Captury_requestTexture(int actorId);
 
 // requests an update of the texture for the given actor. blocking
 // returns the timestamp of the constraint or 0
-CAPTURY_DLL_EXPORT uint64_t Captury_getMarkerTransform(const CapturyActor* actor, int joint, CapturyTransform* trafo);
+CAPTURY_DLL_EXPORT uint64_t Captury_getMarkerTransform(int actorId, int joint, CapturyTransform* trafo);
 
 // get the scaling status (0 - 100)
-CAPTURY_DLL_EXPORT int Captury_getScalingProgress(const CapturyActor* actor);
+CAPTURY_DLL_EXPORT int Captury_getScalingProgress(int actorId);
 
 // get the tracking quality (0 - 100)
-CAPTURY_DLL_EXPORT int Captury_getTrackingQuality(const CapturyActor* actor);
+CAPTURY_DLL_EXPORT int Captury_getTrackingQuality(int actorId);
 
 // change the name of the actor
-CAPTURY_DLL_EXPORT int Captury_setActorName(const CapturyActor* actor, const char* name);
+CAPTURY_DLL_EXPORT int Captury_setActorName(int actorId, const char* name);
 
 // returns a texture image of the specified actor. free after use with Captury_freeImage().
-CAPTURY_DLL_EXPORT CapturyImage* Captury_getTexture(const CapturyActor* actor);
+CAPTURY_DLL_EXPORT CapturyImage* Captury_getTexture(int actorId);
 
 // simple function for releasing memory of a pose
 CAPTURY_DLL_EXPORT void Captury_freeImage(CapturyImage* image);
@@ -289,7 +289,7 @@ CAPTURY_DLL_EXPORT int Captury_sendCustomPacket(const char* pluginName, int size
 CAPTURY_DLL_EXPORT int Captury_registerCustomPacketCallback(const char* pluginName, CapturyCustomPacketCallback callback);
 
 // convert the pose given in global coordinates into local coordinates
-CAPTURY_DLL_EXPORT void Captury_convertPoseToLocal(CapturyPose* pose, const CapturyActor* actor);
+CAPTURY_DLL_EXPORT void Captury_convertPoseToLocal(CapturyPose* pose, int actorId);
 
 
 typedef void (*CapturyBackgroundFinishedCallback)(void* userData);
