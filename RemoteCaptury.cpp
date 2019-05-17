@@ -76,7 +76,7 @@ struct ActorData {
 
 	CapturyActorStatus	status;
 
-	ActorData() : scalingProgress(100), trackingQuality(100), inProgressPose(NULL), lastPoseTimestamp(0), status(ACTOR_DELETED) { currentPose.numTransforms = 0; currentTextures.width = 0; currentTextures.height = 0; currentTextures.data = NULL; }
+	ActorData() : scalingProgress(0), trackingQuality(100), inProgressPose(NULL), lastPoseTimestamp(0), status(ACTOR_DELETED) { currentPose.numTransforms = 0; currentTextures.width = 0; currentTextures.height = 0; currentTextures.data = NULL; }
 };
 
 static std::map<int, ActorData> actorData;
