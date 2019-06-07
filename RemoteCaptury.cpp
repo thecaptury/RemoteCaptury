@@ -1015,7 +1015,11 @@ static void* streamLoop(void* arg)
 				receivedPoseTimestamp = 0;
 			}
 			unlockMutex(&mutex);
+			#ifdef WIN32
+			printf("latency received %lld, %lld - %lld, %lld - %lld,%lld,%lld\n", lp->firstImagePacket, lp->optimizationStart, lp->optimizationEnd, lp->sendPacketTime, dataAvailableTime, dataReceivedTime, receivedPoseTime);
+			#else
 			printf("latency received %ld, %ld - %ld, %ld - %ld,%ld,%ld\n", lp->firstImagePacket, lp->optimizationStart, lp->optimizationEnd, lp->sendPacketTime, dataAvailableTime, dataReceivedTime, receivedPoseTime);
+			#endif
 			continue;
 		}
 
