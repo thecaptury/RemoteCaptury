@@ -52,15 +52,9 @@ CAPTURY_DLL_EXPORT int Captury_getCameras(const CapturyCamera** cameras);
 #define CAPTURY_STREAM_LOCAL_POSES	0x03
 #define CAPTURY_STREAM_ARTAGS		0x04
 #define CAPTURY_STREAM_IMAGES		0x08
+#define CAPTURY_STREAM_META_DATA	0x10	// only valid when streaming poses
 #define CAPTURY_STREAM_IMU_DATA		0x20
 #define CAPTURY_STREAM_LATENCY_INFO	0x40
-
-// only valid when streaming poses
-#define CAPTURY_STREAM_META_DATA	0x10
-
-// get the last error message
-CAPTURY_DLL_EXPORT char* Captury_getLastErrorMessage();
-CAPTURY_DLL_EXPORT void Captury_freeErrorMessage(char* msg);
 
 // returns 1 if successful, 0 otherwise
 CAPTURY_DLL_EXPORT int Captury_startStreaming(int what);
@@ -75,16 +69,16 @@ CAPTURY_DLL_EXPORT int Captury_startStreamingImages(int what, int32_t cameraId);
 CAPTURY_DLL_EXPORT int Captury_stopStreaming();
 
 // fills the pose with the current pose for the given actor
-// returns the current pose. free() after use
+// returns the current pose. Captury_freePose() after use
 CAPTURY_DLL_EXPORT CapturyPose* Captury_getCurrentPoseForActor(int actorId);
 CAPTURY_DLL_EXPORT CapturyPose* Captury_getCurrentPoseAndTrackingConsistencyForActor(int actorId, int* tc);
 CAPTURY_DLL_EXPORT CapturyPose* Captury_getCurrentPose(int actorId);
 CAPTURY_DLL_EXPORT CapturyPose* Captury_getCurrentPoseAndTrackingConsistency(int actorId, int* tc);
 
-typedef void (*CapturyNewPoseCallback)(CapturyActor*, CapturyPose*, int trackingQuality);
-
 // simple function for releasing memory of a pose
 CAPTURY_DLL_EXPORT void Captury_freePose(CapturyPose* pose);
+
+typedef void (*CapturyNewPoseCallback)(CapturyActor*, CapturyPose*, int trackingQuality);
 
 // register callback that will be called when a new pose is received
 // the callback will be run in a different thread than the main application
@@ -160,6 +154,11 @@ CAPTURY_DLL_EXPORT uint64_t Captury_getTime();
 
 // returns the difference between the local and the remote time in microseconds
 CAPTURY_DLL_EXPORT int64_t Captury_getTimeOffset();
+
+
+// get the last error message
+CAPTURY_DLL_EXPORT char* Captury_getLastErrorMessage();
+CAPTURY_DLL_EXPORT void Captury_freeErrorMessage(char* msg);
 
 
 
