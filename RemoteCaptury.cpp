@@ -29,8 +29,11 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <pthread.h>
+#include <errno.h>
 #endif
 #include <cmath>
+#include <inttypes.h>
 
 typedef uint32_t uint;
 
@@ -553,11 +556,8 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 			// so the timestamp given in the packet was captured at (pingTime + pongTime) / 2
 			uint64_t t = (pongTime - pingTime) / 2 + pingTime;
 			timeOffset = tp->timestamp - t;
-			#ifdef WIN32
-			printf("%llu ts %llu => offset %lld, roundtrip %lld\n", t, tp->timestamp, timeOffset, pongTime - pingTime);
-			#else
-			printf("%lu ts %lu => offset %ld, roundtrip %ld\n", t, tp->timestamp, timeOffset, pongTime - pingTime);
-			#endif
+
+				printf("%" PRIu64 " ts %" PRIu64 " => offset %" PRIu64 ", roundtrip %" PRId64 "\n", t, tp->timestamp, timeOffset, pongTime - pingTime);
 			break; }
 		case capturyCustom: {
 			CapturyCustomPacket* ccp = (CapturyCustomPacket*)&buf[0];
@@ -1062,11 +1062,7 @@ static void* streamLoop(void* arg)
 				receivedPoseTimestamp = 0;
 			}
 			unlockMutex(&mutex);
-			#ifdef WIN32
-			printf("latency received %lld, %lld - %lld, %lld - %lld,%lld,%lld\n", lp->firstImagePacket, lp->optimizationStart, lp->optimizationEnd, lp->sendPacketTime, dataAvailableTime, dataReceivedTime, receivedPoseTime);
-			#else
-			printf("latency received %ld, %ld - %ld, %ld - %ld,%ld,%ld\n", lp->firstImagePacket, lp->optimizationStart, lp->optimizationEnd, lp->sendPacketTime, dataAvailableTime, dataReceivedTime, receivedPoseTime);
-			#endif
+			printf("latency received %" PRIu64 ", %" PRIu64 " - %" PRIu64 ", %" PRIu64 " - %" PRIu64 ",%" PRIu64 ",%" PRIu64 "\n", lp->firstImagePacket, lp->optimizationStart, lp->optimizationEnd, lp->sendPacketTime, dataAvailableTime, dataReceivedTime, receivedPoseTime);
 			continue;
 		}
 
