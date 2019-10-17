@@ -456,6 +456,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 			//printf("received actor %d (%d/%d), missing %d\n", actor.id, numTransmittedJoints, actor.numJoints, packetsMissing);
 			p->type = capturyActor;
 			if (numTransmittedJoints == actor.numJoints) {
+				//printf("received fulll actor %d\n", actor.id);
 				lockMutex(&mutex);
 				newActors.push_back(actor);
 				unlockMutex(&mutex);
@@ -497,6 +498,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 					}
 				}
 				if (j == actor.numJoints) {
+					// printf("received fulll actor %d\n", actor.id);
 					lockMutex(&mutex);
 					newActors.push_back(actor);
 					unlockMutex(&mutex);
@@ -506,7 +508,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 					numRetries += 1;
 					packetsMissing += 1;
 				}
-				//printf("received actor %d (%d/%d), missing %d\n", actor.id, j, actor.numJoints, packetsMissing);
+				// printf("received actor cont %d (%d/%d), missing %d\n", actor.id, j, actor.numJoints, packetsMissing);
 				break;
 			}
 			break; }
@@ -641,7 +643,25 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 	return (packetsMissing == 0);
 }
 
-void receivedPose(CapturyPose* pose, int actorId, ActorData* aData, uint64_t timestamp)
+static bool sendPacket(CapturyRequestPacket* packet, CapturyPacketTypes expectedReplyType)
+{
+	bool received = false;
+	for (int i = 0; i < 3; ++i) {
+		if (send(sock, (const char*)packet, packet->size, 0) != packet->size)
+			continue;
+
+		if (expectedReplyType == capturyError)
+			break;
+		if (receive(sock, expectedReplyType)) {
+			received = true;
+			break;
+		}
+	}
+
+	return received;
+}
+
+static void receivedPose(CapturyPose* pose, int actorId, ActorData* aData, uint64_t timestamp)
 {
 	if (getLocalPoses)
 		Captury_convertPoseToLocal(pose, actorId);
@@ -662,10 +682,37 @@ void receivedPose(CapturyPose* pose, int actorId, ActorData* aData, uint64_t tim
 			actorChangedCallback(actorId, ACTOR_TRACKING);
 	}
 
-	//		printf("updated pose for %d\n", cpp->actor);
+	if (newPoseCallback != NULL) {
+		if (actorsById[actorId])
+			newPoseCallback(actorsById[actorId], pose, aData->trackingQuality);
+		else {
+			lockMutex(&mutex);
+			bool added = false;
+			while (!newActors.empty()) {
+				CapturyActor& actor = newActors.back();
+				if (actorsById.count(actor.id) == 0 || actorsById[actor.id] == nullptr) {
+					actors.push_back(actor);
+					added = true;
+				}
+				newActors.pop_back();
+			}
+			if (added) {
+				actorsById.clear();
+				for (CapturyActor& actor : actors)
+					actorsById[actor.id] = &actor;
+			}
+			unlockMutex(&mutex);
 
-	if (newPoseCallback != NULL)
-		newPoseCallback(actorsById[actorId], pose, aData->trackingQuality);
+			if (actorsById.count(actorId) == 0 || actorsById[actorId] == nullptr) {
+				CapturyRequestPacket packet;
+				packet.type = capturyActors;
+				packet.size = sizeof(packet);
+
+				sendPacket(&packet, capturyActors);
+			} else
+				newPoseCallback(actorsById[actorId], pose, aData->trackingQuality);
+		}
+	}
 
 	// mark actors as stopped if no data was received for a while
 	now -= 500000; // half a second ago
@@ -1029,13 +1076,6 @@ static void* streamLoop(void* arg)
 		}
 
 		lockMutex(&mutex);
-		if (actorsById.count(cpp->actor) == 0) {
-			char buf[400];
-			snprintf(buf, 400, "Actor %x does not exist", cpp->actor);
-			lastErrorMessage = buf;
-			unlockMutex(&mutex);
-			continue;
-		}
 
 		int numValues;
 		float* values;
@@ -1051,7 +1091,7 @@ static void* streamLoop(void* arg)
 			at = (int)((char*)(((CapturyPosePacket2*)cpp)->values) - (char*)cpp);
 		}
 
-		if (actorsById[cpp->actor]->numJoints * 6 != numValues) {
+		if (actorsById.count(cpp->actor) != 0 && actorsById[cpp->actor] && actorsById[cpp->actor]->numJoints * 6 != numValues) {
 			printf("expected %d dofs, got %d\n", actorsById[cpp->actor]->numJoints * 6, numValues);
 			unlockMutex(&mutex);
 			continue;
@@ -1245,24 +1285,6 @@ extern "C" int Captury_disconnect()
 	}
 
 	return 1;
-}
-
-static bool sendPacket(CapturyRequestPacket* packet, CapturyPacketTypes expectedReplyType)
-{
-	bool received = false;
-	for (int i = 0; i < 3; ++i) {
-		if (send(sock, (const char*)packet, packet->size, 0) != packet->size)
-			continue;
-
-		if (expectedReplyType == capturyError)
-			break;
-		if (receive(sock, expectedReplyType)) {
-			received = true;
-			break;
-		}
-	}
-
-	return received;
 }
 
 // returns the current number of actors
