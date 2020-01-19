@@ -125,7 +125,6 @@ CAPTURY_DLL_EXPORT CapturyImage* Captury_getCurrentImage();
 // returns 1 if successful otherwise 0
 CAPTURY_DLL_EXPORT int Captury_requestTexture(int actorId);
 
-// requests an update of the texture for the given actor. blocking
 // returns the timestamp of the constraint or 0
 CAPTURY_DLL_EXPORT uint64_t Captury_getMarkerTransform(int actorId, int joint, CapturyTransform* trafo);
 
