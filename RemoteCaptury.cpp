@@ -418,6 +418,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 			for (int j = 0; at < end; ++j) {
 				if (isActor1) {
 					CapturyJointPacket* jp = (CapturyJointPacket*)at;
+					actor.joints[j].parent = jp->parent;
 					for (int x = 0; x < 3; ++x) {
 						actor.joints[j].offset[x] = jp->offset[x];
 						actor.joints[j].orientation[x] = jp->orientation[x];
@@ -426,6 +427,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 					at += sizeof(CapturyJointPacket);
 				} else {
 					CapturyJointPacket2* jp = (CapturyJointPacket2*)at;
+					actor.joints[j].parent = jp->parent;
 					for (int x = 0; x < 3; ++x) {
 						actor.joints[j].offset[x] = jp->offset[x];
 						actor.joints[j].orientation[x] = jp->orientation[x];
