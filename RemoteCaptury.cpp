@@ -406,7 +406,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 		case capturyActor2: {
 			CapturyActor actor;
 			CapturyActorPacket* cap = (CapturyActorPacket*)&buf[0];
-			strcpy(actor.name, cap->name);
+			strncpy(actor.name, cap->name, sizeof(actor.name));
 			actor.id = cap->id;
 			actor.numJoints = cap->numJoints;
 			actor.joints = new CapturyJoint[actor.numJoints];
@@ -422,7 +422,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 						actor.joints[j].offset[x] = jp->offset[x];
 						actor.joints[j].orientation[x] = jp->orientation[x];
 					}
-					strcpy(actor.joints[j].name, jp->name);
+					strncpy(actor.joints[j].name, jp->name, sizeof(actor.joints[j].name));
 					at += sizeof(CapturyJointPacket);
 				} else {
 					CapturyJointPacket2* jp = (CapturyJointPacket2*)at;
@@ -430,7 +430,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 						actor.joints[j].offset[x] = jp->offset[x];
 						actor.joints[j].orientation[x] = jp->orientation[x];
 					}
-					strcpy(actor.joints[j].name, jp->name);
+					strncpy(actor.joints[j].name, jp->name, sizeof(actor.joints[j].name));
 					at += sizeof(CapturyJointPacket2) + strlen(jp->name) + 1;
 				}
 				numTransmittedJoints = j + 1;
@@ -445,7 +445,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 				}
 			}*/
 			for (int j = numTransmittedJoints; j < actor.numJoints; ++j) { // initialize to default values
-				strcpy(actor.joints[j].name, "uninitialized");
+				strncpy(actor.joints[j].name, "uninitialized", sizeof(actor.joints[j].name));
 				actor.joints[j].parent = 0;
 				for (int x = 0; x < 3; ++x) {
 					actor.joints[j].offset[x] = 0;
@@ -479,7 +479,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 				if (isActor1) {
 					CapturyJointPacket* end = (CapturyJointPacket*)&buf[size];
 					for (int k = 0; j < actor.numJoints && &cacp->joints[k] < end; ++j, ++k) {
-						strcpy(actor.joints[j].name, cacp->joints[k].name);
+						strncpy(actor.joints[j].name, cacp->joints[k].name, sizeof(actor.joints[j].name));
 						actor.joints[j].parent = cacp->joints[k].parent;
 						for (int x = 0; x < 3; ++x) {
 							actor.joints[j].offset[x] = cacp->joints[k].offset[x];
@@ -496,7 +496,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 							actor.joints[j].offset[x] = jp->offset[x];
 							actor.joints[j].orientation[x] = jp->orientation[x];
 						}
-						strcpy(actor.joints[j].name, jp->name);
+						strncpy(actor.joints[j].name, jp->name, sizeof(actor.joints[j].name));
 						at += sizeof(CapturyJointPacket2) + strlen(jp->name) + 1;
 					}
 				}
@@ -518,7 +518,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 		case capturyCamera: {
 			CapturyCamera camera;
 			CapturyCameraPacket* ccp = (CapturyCameraPacket*)&buf[0];
-			strcpy(camera.name, ccp->name);
+			strncpy(camera.name, ccp->name, sizeof(camera.name));
 			camera.id = ccp->id;
 			for (int x = 0; x < 3; ++x) {
 				camera.position[x] = ccp->position[x];
@@ -529,7 +529,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 			camera.focalLength = ccp->focalLength;
 			camera.lensCenter[0] = ccp->lensCenter[0];
 			camera.lensCenter[1] = ccp->lensCenter[1];
-			strcpy(camera.distortionModel, "none");
+			strncpy(camera.distortionModel, "none", sizeof(camera.distortionModel));
 			memset(&camera.distortion[0], 0, sizeof(camera.distortion));
 
 			// TODO compute extrinsic and intrinsic matrix
@@ -747,7 +747,6 @@ static void* streamLoop(void* arg)
 
 	if (bind(streamSock, (sockaddr*) &localStreamAddress, sizeof(localStreamAddress)) != 0) {
 		closesocket(streamSock);
-		streamSock = -1;
 		printf("failed to bind stream socket\n");
 		delete packet;
 		return 0;
@@ -755,7 +754,6 @@ static void* streamLoop(void* arg)
 
 	if (connect(streamSock, (sockaddr*) &remoteAddress, sizeof(remoteAddress)) != 0) {
 		closesocket(streamSock);
-		streamSock = -1;
 		printf("failed to connect stream socket\n");
 		delete packet;
 		return 0;
@@ -1748,7 +1746,7 @@ extern "C" int Captury_setShotName(const char* name)
 	CapturySetShotPacket packet;
 	packet.type = capturySetShot;
 	packet.size = sizeof(packet);
-	strcpy(packet.shot, name);
+	strncpy(packet.shot, name, sizeof(packet.shot));
 
 	if (!sendPacket((CapturyRequestPacket*)&packet, capturySetShotAck))
 		return 0;
