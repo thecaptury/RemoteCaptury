@@ -418,6 +418,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 			for (int j = 0; at < end; ++j) {
 				if (isActor1) {
 					CapturyJointPacket* jp = (CapturyJointPacket*)at;
+					actor.joints[j].parent = jp->parent;
 					for (int x = 0; x < 3; ++x) {
 						actor.joints[j].offset[x] = jp->offset[x];
 						actor.joints[j].orientation[x] = jp->orientation[x];
@@ -426,6 +427,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 					at += sizeof(CapturyJointPacket);
 				} else {
 					CapturyJointPacket2* jp = (CapturyJointPacket2*)at;
+					actor.joints[j].parent = jp->parent;
 					for (int x = 0; x < 3; ++x) {
 						actor.joints[j].offset[x] = jp->offset[x];
 						actor.joints[j].orientation[x] = jp->orientation[x];
@@ -813,7 +815,6 @@ static void* streamLoop(void* arg)
 			lastHeartbeat = time(nullptr);
 		}
 
-		struct timeval tv;
 		tv.tv_sec = 0;
 		tv.tv_usec = 500000; // 0.5s = 2Hz
 		int ret = select((int)(streamSock+1), &reader, NULL, NULL, &tv);
@@ -839,13 +840,13 @@ static void* streamLoop(void* arg)
 			continue;
 		}
 		if (size == -1) { // error
-			char buf[200];
+			char buff[200];
 			#ifdef WIN32
-			sprintf(buf, "Stream socket error: %d", WSAGetLastError());
+			sprintf(buff, "Stream socket error: %d", WSAGetLastError());
 			#else
-			sprintf(buf, "Stream socket error: %s", strerror(errno));
+			sprintf(buff, "Stream socket error: %s", strerror(errno));
 			#endif
-			lastErrorMessage = buf;
+			lastErrorMessage = buff;
 			break;
 		}
 
@@ -909,12 +910,12 @@ static void* streamLoop(void* arg)
 
 			// and request the data to go with it
 			if (sock != -1 && streamSocketPort != 0) {
-				CapturyGetImageDataPacket packet;
-				packet.type = capturyGetStreamedImageData;
-				packet.size = sizeof(packet);
-				packet.actor = tp->actor;
-				packet.port = streamSocketPort;
-				if (send(sock, (const char*)&packet, packet.size, 0) != packet.size)
+				CapturyGetImageDataPacket imPacket;
+				imPacket.type = capturyGetStreamedImageData;
+				imPacket.size = sizeof(imPacket);
+				imPacket.actor = tp->actor;
+				imPacket.port = streamSocketPort;
+				if (send(sock, (const char*)&imPacket, imPacket.size, 0) != imPacket.size)
 					printf("cannot request streamed image data\n");
 			}
 			continue;
@@ -947,8 +948,8 @@ static void* streamLoop(void* arg)
 
 			// mark paket as received
 			const int packetIndex = cip->offset / (cip->size-16);
-			std::vector<int>& received = currentImagesReceivedPackets[cip->actor];
-			if (received[packetIndex] == 1) { // copying image to done although it is not quite finished
+			std::vector<int>& recvd = currentImagesReceivedPackets[cip->actor];
+			if (recvd[packetIndex] == 1) { // copying image to done although it is not quite finished
 				auto done = currentImagesDone.find(cip->actor);
 				if (done == currentImagesDone.end()) {
 					currentImagesDone[cip->actor].camera = it->second.camera;
@@ -959,16 +960,16 @@ static void* streamLoop(void* arg)
 				done->second.height = it->second.height;
 				done->second.timestamp = it->second.timestamp;
 				std::swap(done->second.data, it->second.data);
-				std::fill(received.begin(), received.end(), 0);
+				std::fill(recvd.begin(), recvd.end(), 0);
 				finished = true;
 			}
-			received[packetIndex] = 1;
-			++received[received.size()-1];
+			recvd[packetIndex] = 1;
+			++recvd[recvd.size()-1];
 
 			// copy data
 			memcpy(it->second.data + cip->offset, cip->data, cip->size-16);
 
-			if (received[received.size()-1] == (int)received.size()-2) { // done
+			if (recvd[recvd.size()-1] == (int)recvd.size()-2) { // done
 				auto done = currentImagesDone.find(cip->actor);
 				if (done == currentImagesDone.end()) {
 					currentImagesDone[cip->actor].camera = it->second.camera;
@@ -979,7 +980,7 @@ static void* streamLoop(void* arg)
 				done->second.height = it->second.height;
 				done->second.timestamp = it->second.timestamp;
 				std::swap(done->second.data, it->second.data);
-				std::fill(received.begin(), received.end(), 0);
+				std::fill(recvd.begin(), recvd.end(), 0);
 				finished = true;
 			}
 			unlockMutex(&mutex);
@@ -1016,9 +1017,9 @@ static void* streamLoop(void* arg)
 		if (cpp->type == capturyPoseCont) {
 			lockMutex(&mutex);
 			if (actorsById.count(cpp->actor) == 0) {
-				char buf[400];
-				snprintf(buf, 400, "pose continuation: Actor %d does not exist", cpp->actor);
-				lastErrorMessage = buf;
+				char buff[400];
+				snprintf(buff, 400, "pose continuation: Actor %d does not exist", cpp->actor);
+				lastErrorMessage = buff;
 				unlockMutex(&mutex);
 				continue;
 			}
@@ -1070,6 +1071,13 @@ static void* streamLoop(void* arg)
 		}
 
 		lockMutex(&mutex);
+		if (actorsById.count(cpp->actor) == 0) {
+			char buff[400];
+			snprintf(buff, 400, "Actor %x does not exist", cpp->actor);
+			lastErrorMessage = buff;
+			unlockMutex(&mutex);
+			continue;
+		}
 
 		int numValues;
 		float* values;
