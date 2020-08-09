@@ -1637,6 +1637,7 @@ extern "C" CapturyImage* Captury_getTexture(int actorId)
 	image->camera = -1;
 	image->timestamp = 0;
 	image->data = (unsigned char*)&image[1];
+	image->gpuData = nullptr;
 
 	lockMutex(&mutex);
 	memcpy(image->data, it->second.currentTextures.data, size);
