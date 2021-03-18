@@ -166,13 +166,13 @@ static inline void unlockMutex(CRITICAL_SECTION* critsec)
 	LeaveCriticalSection(critsec);
 }
 #else
-static inline void lockMutex(pthread_mutex_t* mutex)
+static inline void lockMutex(pthread_mutex_t* mtx)
 {
-	pthread_mutex_lock(mutex);
+	pthread_mutex_lock(mtx);
 }
-static inline void unlockMutex(pthread_mutex_t* mutex)
+static inline void unlockMutex(pthread_mutex_t* mtx)
 {
-	pthread_mutex_unlock(mutex);
+	pthread_mutex_unlock(mtx);
 }
 #endif
 
@@ -2095,8 +2095,12 @@ int Captury_registerCustomPacketCallback(const char* pluginName, CapturyCustomPa
 	return 1;
 }
 
+#ifndef DEG2RADf
 #define DEG2RADf		(0.0174532925199432958f)
+#endif
+#ifndef RAD2DEGf
 #define RAD2DEGf		(57.29577951308232088f)
+#endif
 
 // initialize complete 4x4 matrix with rotation from euler angles and translation from translation vector
 static float* transformationMatrix(const float* eulerAngles, const float* translation, float* m4x4) // checked
