@@ -24,6 +24,12 @@
 #define snprintf _snprintf
 #include <winsock2.h>
 #pragma comment(lib, "ws2_32.lib")
+#ifndef PRIu64
+#define PRIu64 "I64u"
+#endif
+#ifndef PRId64
+#define PRId64 "I64d"
+#endif
 #else
 #include <unistd.h>
 #include <sys/socket.h>
