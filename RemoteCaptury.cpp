@@ -9,6 +9,8 @@
 #include <time.h>
 
 #include <string.h>
+#include <inttypes.h>
+#include <cmath>
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -38,8 +40,6 @@
 #include <pthread.h>
 #include <errno.h>
 #endif
-#include <cmath>
-#include <inttypes.h>
 
 typedef uint32_t uint;
 
