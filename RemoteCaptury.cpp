@@ -1040,7 +1040,7 @@ static void* streamLoop(void* arg)
 			CapturyPoseCont* cpc = (CapturyPoseCont*)cpp;
 
 			int numBytesToCopy = size - ((char*)cpc->values - (char*)cpc);
-			int totalBytes = actorsById[cpp->actor]->numJoints * sizeof(float);
+			int totalBytes = actorsById[cpp->actor]->numJoints * sizeof(float) * 6;
 			if (it->second.inProgressBytesDone + numBytesToCopy > totalBytes) {
 				lastErrorMessage = "pose continuation too large";
 				unlockMutex(&mutex);
@@ -1053,6 +1053,7 @@ static void* streamLoop(void* arg)
 				memcpy(it->second.currentPose.transforms, it->second.inProgressPose, totalBytes);
 				receivedPose(&it->second.currentPose, cpc->actor, &actorData[cpc->actor], it->second.inProgressTimestamp);
 			}
+			continue;
 		}
 
 		if (cpp->type == capturyLatency) {
