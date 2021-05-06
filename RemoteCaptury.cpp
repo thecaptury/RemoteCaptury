@@ -85,7 +85,9 @@ struct ActorData {
 
 	CapturyActorStatus	status;
 
-	ActorData() : scalingProgress(0), trackingQuality(100), inProgressPose(NULL), lastPoseTimestamp(0), status(ACTOR_DELETED) { currentPose.numTransforms = 0; currentTextures.width = 0; currentTextures.height = 0; currentTextures.data = NULL; }
+	int			flags;
+
+	ActorData() : scalingProgress(0), trackingQuality(100), inProgressPose(NULL), lastPoseTimestamp(0), status(ACTOR_DELETED), flags(0) { currentPose.numTransforms = 0; currentTextures.width = 0; currentTextures.height = 0; currentTextures.data = NULL; }
 };
 
 static std::map<int, ActorData> actorData;
@@ -1117,6 +1119,7 @@ static void* streamLoop(void* arg)
 		if (cpp->type == capturyPose2) {
 			it->second.scalingProgress = ((CapturyPosePacket2*)cpp)->scalingProgress;
 			it->second.trackingQuality = ((CapturyPosePacket2*)cpp)->trackingQuality;
+			it->second.flags = ((CapturyPosePacket2*)cpp)->flags;
 		}
 
 		int numBytesToCopy = sizeof(float) * numValues;

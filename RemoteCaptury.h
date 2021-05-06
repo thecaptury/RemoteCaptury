@@ -46,15 +46,16 @@ CAPTURY_DLL_EXPORT int Captury_getCameras(const CapturyCamera** cameras);
 
 
 
-#define CAPTURY_STREAM_NOTHING		0x00
-#define CAPTURY_STREAM_POSES		0x01
-#define CAPTURY_STREAM_GLOBAL_POSES	0x01
-#define CAPTURY_STREAM_LOCAL_POSES	0x03
-#define CAPTURY_STREAM_ARTAGS		0x04
-#define CAPTURY_STREAM_IMAGES		0x08
-#define CAPTURY_STREAM_META_DATA	0x10	// only valid when streaming poses
-#define CAPTURY_STREAM_IMU_DATA		0x20
-#define CAPTURY_STREAM_LATENCY_INFO	0x40
+#define CAPTURY_STREAM_NOTHING		0x0000
+#define CAPTURY_STREAM_POSES		0x0001
+#define CAPTURY_STREAM_GLOBAL_POSES	0x0001
+#define CAPTURY_STREAM_LOCAL_POSES	0x0003
+#define CAPTURY_STREAM_ARTAGS		0x0004
+#define CAPTURY_STREAM_IMAGES		0x0008
+#define CAPTURY_STREAM_META_DATA	0x0010	// only valid when streaming poses
+#define CAPTURY_STREAM_IMU_DATA		0x0020
+#define CAPTURY_STREAM_LATENCY_INFO	0x0040
+#define CAPTURY_STREAM_FOOT_CONTACT	0x0080
 
 // returns 1 if successful, 0 otherwise
 CAPTURY_DLL_EXPORT int Captury_startStreaming(int what);
@@ -478,7 +479,8 @@ struct CapturyPosePacket2 {
 	uint64_t	timestamp;
 	uint8_t		trackingQuality; // [0 .. 100]
 	uint8_t		scalingProgress; // [0 .. 100]
-	uint16_t	reserved;  // 0 for now
+	uint8_t		flags;     // CAPTURY_LEFT_FOOT_ON_GROUND | CAPTURY_RIGHT_FOOT_ON_GROUND
+	uint8_t		reserved;  // 0 for now
 	int32_t		numValues; // multiple of 6
 	float		values[];
 };
