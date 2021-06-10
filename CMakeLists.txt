@@ -14,7 +14,18 @@ add_library(RemoteCaptury SHARED RemoteCaptury.cpp)
 add_library(RemoteCapturyStatic STATIC RemoteCaptury.cpp)
 
 find_package (Python3 COMPONENTS Development)
-if (Python3_FOUND)
+if (NOT TARGET Python3::Python)
+	find_package(PythonLibs)
+	if (PYTHONLIBS_FOUND)
+		add_library(Python3::Python UNKNOWN IMPORTED)
+		set_target_properties(Python3::Python PROPERTIES
+			IMPORTED_LOCATION ${PYTHON_LIBRARY}
+			INTERFACE_INCLUDE_DIRECTORIES ${PYTHON_INCLUDE_DIR})
+		set(Python3_FOUND ON)
+	endif (PYTHONLIBS_FOUND)
+endif (NOT TARGET Python3::Python)
+
+if (TARGET Python3::Python)
 	add_library(RemoteCapturyPython SHARED RemoteCapturyPython.cpp RemoteCaptury.cpp)
 	target_link_libraries(RemoteCapturyPython Python3::Python)
 	set_target_properties(RemoteCapturyPython
@@ -23,6 +34,4 @@ if (Python3_FOUND)
 			OUTPUT_NAME "remotecaptury"
 			LINKER_LANGUAGE C
 	)
-else()
-	message(WARNING "python was not found")
-endif (Python3_FOUND)
+endif (TARGET Python3::Python)
