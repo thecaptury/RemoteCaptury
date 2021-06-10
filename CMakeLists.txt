@@ -12,3 +12,17 @@ message(STATUS "working on remotecaptury library")
 include_directories(../include)
 add_library(RemoteCaptury SHARED RemoteCaptury.cpp)
 add_library(RemoteCapturyStatic STATIC RemoteCaptury.cpp)
+
+find_package (Python3 COMPONENTS Development)
+if (Python3_FOUND)
+	add_library(RemoteCapturyPython SHARED RemoteCapturyPython.cpp RemoteCaptury.cpp)
+	target_link_libraries(RemoteCapturyPython Python3::Python)
+	set_target_properties(RemoteCapturyPython
+		PROPERTIES
+			PREFIX ""
+			OUTPUT_NAME "remotecaptury"
+			LINKER_LANGUAGE C
+	)
+else()
+	message(WARNING "python was not found")
+endif (Python3_FOUND)
