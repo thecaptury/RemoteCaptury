@@ -315,19 +315,39 @@ const char* Captury_getHumanReadableMessageType(CapturyPacketTypes type)
 	return "<unknown message type>";
 }
 
+#ifdef WIN32
+// thanks https://www.frenk.com/2009/12/convert-filetime-to-unix-timestamp/
+// A UNIX timestamp contains the number of seconds from Jan 1, 1970, while the FILETIME documentation says:
+// Contains a 64-bit value representing the number of 100-nanosecond intervals since January 1, 1601 (UTC).
+//
+// Between Jan 1, 1601 and Jan 1, 1970 there are 11644473600 seconds, so we will just subtract that value:
+uint64_t convertFileTimeToTimestamp(FILETIME& ft)
+{
+	// takes the last modified date
+	LARGE_INTEGER date, adjust;
+	date.HighPart = ft.dwHighDateTime;
+	date.LowPart = ft.dwLowDateTime;
+
+	// 100-nanoseconds = milliseconds * 10000
+	adjust.QuadPart = 11644473600000 * 10000;
+
+	// removes the diff between 1970 and 1601
+	date.QuadPart -= adjust.QuadPart;
+
+	// converts back from 100-nanoseconds to microseconds
+	return date.QuadPart / 10;
+}
+#endif
+
 //
 // returns current time in us
 //
 static uint64_t getTime()
 {
 #ifdef WIN32
-	static LARGE_INTEGER freq = {0, 0};
-	if(freq.QuadPart == 0)
-		QueryPerformanceFrequency(&freq);
-
-	LARGE_INTEGER li;
-	QueryPerformanceCounter(&li);
-	return (uint64_t)li.QuadPart * 1000000 / freq.QuadPart;
+	FILETIME ft;
+	GetSystemTimePreciseAsFileTime(&ft);
+	return convertFileTimeToTimestamp(ft);
 #else
 	timespec t;
 	clock_gettime(CLOCK_REALTIME, &t);
@@ -1041,7 +1061,7 @@ static void* streamLoop(void* arg)
 
 			CapturyPoseCont* cpc = (CapturyPoseCont*)cpp;
 
-			int numBytesToCopy = size - ((char*)cpc->values - (char*)cpc);
+			int numBytesToCopy = size - (int)((char*)cpc->values - (char*)cpc);
 			int totalBytes = actorsById[cpp->actor]->numJoints * sizeof(float) * 6;
 			if (it->second.inProgressBytesDone + numBytesToCopy > totalBytes) {
 				lastErrorMessage = "pose continuation too large";
