@@ -586,8 +586,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 			// so the timestamp given in the packet was captured at (pingTime + pongTime) / 2
 			uint64_t t = (pongTime - pingTime) / 2 + pingTime;
 			timeOffset = tp->timestamp - t;
-
-				printf("%" PRIu64 " ts %" PRIu64 " => offset %" PRIu64 ", roundtrip %" PRId64 "\n", t, tp->timestamp, timeOffset, pongTime - pingTime);
+			printf("%" PRIu64 " ts %" PRIu64 " => offset %" PRId64 ", roundtrip %" PRId64 "\n", t, tp->timestamp, timeOffset, pongTime - pingTime);
 			break; }
 		case capturyCustom: {
 			CapturyCustomPacket* ccp = (CapturyCustomPacket*)&buf[0];
