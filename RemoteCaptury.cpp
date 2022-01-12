@@ -27,10 +27,13 @@
 #include <winsock2.h>
 #pragma comment(lib, "ws2_32.lib")
 #ifndef PRIu64
-#define PRIu64 "I64u"
+  #define PRIu64 "I64u"
 #endif
 #ifndef PRId64
-#define PRId64 "I64d"
+  #define PRId64 "I64d"
+#endif
+#ifndef SYSTEM_INFO
+  #include <chrono>
 #endif
 #else
 #include <unistd.h>
@@ -345,9 +348,15 @@ uint64_t convertFileTimeToTimestamp(FILETIME& ft)
 static uint64_t getTime()
 {
 #ifdef WIN32
+	#ifdef SYSTEM_INFO
 	FILETIME ft;
 	GetSystemTimePreciseAsFileTime(&ft);
 	return convertFileTimeToTimestamp(ft);
+	#else
+	std::chrono::time_point<std::chrono::system_clock> tp = std::chrono::system_clock::now();
+	std::chrono::duration<double, std::micro> duration = tp.time_since_epoch();
+	return duration.count();
+	#endif
 #else
 	timespec t;
 	clock_gettime(CLOCK_REALTIME, &t);
@@ -586,7 +595,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 			// so the timestamp given in the packet was captured at (pingTime + pongTime) / 2
 			uint64_t t = (pongTime - pingTime) / 2 + pingTime;
 			timeOffset = tp->timestamp - t;
-			printf("%" PRIu64 " ts %" PRIu64 " => offset %" PRId64 ", roundtrip %" PRId64 "\n", t, tp->timestamp, timeOffset, pongTime - pingTime);
+			printf("local: %" PRIu64 " remote: %" PRIu64 " => offset %" PRId64 ", roundtrip %" PRId64 "\n", t, tp->timestamp, timeOffset, pongTime - pingTime);
 			break; }
 		case capturyCustom: {
 			CapturyCustomPacket* ccp = (CapturyCustomPacket*)&buf[0];
