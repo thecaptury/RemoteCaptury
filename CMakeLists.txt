@@ -33,5 +33,6 @@ if (TARGET Python3::Python)
 			PREFIX ""
 			OUTPUT_NAME "remotecaptury"
 			LINKER_LANGUAGE C
+			FOLDER "libraries"
 	)
 endif (TARGET Python3::Python)
