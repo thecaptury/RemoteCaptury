@@ -505,7 +505,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 						actor.joints[j].offset[x] = jp->offset[x];
 						actor.joints[j].orientation[x] = jp->orientation[x];
 					}
-					strncpy(actor.joints[j].name, jp->name, sizeof(actor.joints[j].name));
+					strncpy(actor.joints[j].name, jp->name, sizeof(actor.joints[j].name)-1);
 					at += sizeof(CapturyJointPacket2) + strlen(jp->name) + 1;
 				}
 				numTransmittedJoints = j + 1;
@@ -558,7 +558,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 				if (isActor1) {
 					CapturyJointPacket* end = (CapturyJointPacket*)&buf[size];
 					for (int k = 0; j < actor.numJoints && &cacp->joints[k] < end; ++j, ++k) {
-						strncpy(actor.joints[j].name, cacp->joints[k].name, sizeof(actor.joints[j].name));
+						strncpy(actor.joints[j].name, cacp->joints[k].name, sizeof(actor.joints[j].name)-1);
 						actor.joints[j].parent = cacp->joints[k].parent;
 						for (int x = 0; x < 3; ++x) {
 							actor.joints[j].offset[x] = cacp->joints[k].offset[x];
@@ -575,7 +575,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 							actor.joints[j].offset[x] = jp->offset[x];
 							actor.joints[j].orientation[x] = jp->orientation[x];
 						}
-						strncpy(actor.joints[j].name, jp->name, sizeof(actor.joints[j].name));
+						strncpy(actor.joints[j].name, jp->name, sizeof(actor.joints[j].name)-1);
 						at += sizeof(CapturyJointPacket2) + strlen(jp->name) + 1;
 					}
 				}
@@ -630,12 +630,14 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 			break; }
 		case capturyTime: {
 			CapturyTimePacket* tp = (CapturyTimePacket*)&buf[0];
-			atomicStore(&timeOffset, 0);
+			int64_t zero = 0;
+			atomicStore(&timeOffset, zero);
 			uint64_t pongTime = getTime();
 			// we assume that the network transfer time is symmetric
 			// so the timestamp given in the packet was captured at (pingTime + pongTime) / 2
 			uint64_t t = (pongTime - pingTime) / 2 + pingTime;
-			atomicStore(&timeOffset, tp->timestamp - t);
+			int64_t delta = tp->timestamp - t;
+			atomicStore(&timeOffset, delta);
 			printf("local: %" PRIu64 " remote: %" PRIu64 " => offset %" PRId64 ", roundtrip %" PRId64 "\n", t, tp->timestamp, tp->timestamp - t, pongTime - pingTime);
 			break; }
 		case capturyCustom: {
