@@ -33,6 +33,12 @@ if (TARGET Python3::Python)
 			PREFIX ""
 			OUTPUT_NAME "remotecaptury"
 			LINKER_LANGUAGE C
-			FOLDER "libraries"
 	)
+	if (WIN32)
+		set_target_properties(RemoteCapturyPython
+			PROPERTIES
+				SUFFIX ".pyd"
+				FOLDER "plugins"
+		)
+	endif (WIN32)
 endif (TARGET Python3::Python)
