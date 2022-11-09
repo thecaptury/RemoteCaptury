@@ -12,13 +12,18 @@ static PyObject* connect(PyObject *self, PyObject *args)
 	Py_RETURN_FALSE;
 }
 
-static PyObject* startStreaming(PyObject *self, PyObject *args)
+static PyObject* startStreaming(PyObject *self, PyObject *args, PyObject* kwargs)
 {
+	static char *kwlist[] = {(char *)"what", (char*)"cameraNumber", NULL};
+	int cameraNumber;
 	int what;
-	if (PyArg_ParseTuple(args, "i:startStreaming", &what)) {
-		if (Captury_startStreaming(what))
-			Py_RETURN_TRUE;
+	if (!PyArg_ParseTupleAndKeywords(args, kwargs, "ii:startStreaming", kwlist, &what, &cameraNumber)) {
+		PyErr_SetString(PyExc_TypeError, "startStreaming expects an integer arguments. startStreaming(what: int, cameraNumber:int)->bool");
+		Py_RETURN_FALSE;
 	}
+
+	if (Captury_startStreaming(what))
+		Py_RETURN_TRUE;
 	Py_RETURN_FALSE;
 }
 
