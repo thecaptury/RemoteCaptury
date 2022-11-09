@@ -12,15 +12,35 @@ static PyObject* connect(PyObject *self, PyObject *args)
 	Py_RETURN_FALSE;
 }
 
-static PyObject* startStreaming(PyObject *self, PyObject *args, PyObject* kwargs)
+static PyObject* startStreamingImages(PyObject *self, PyObject *args, PyObject* kwargs)
 {
 	static char *kwlist[] = {(char *)"what", (char*)"cameraNumber", NULL};
 	int cameraNumber;
 	int what;
-	if (!PyArg_ParseTupleAndKeywords(args, kwargs, "ii:startStreaming", kwlist, &what, &cameraNumber)) {
-		PyErr_SetString(PyExc_TypeError, "startStreaming expects an integer arguments. startStreaming(what: int, cameraNumber:int)->bool");
+	if (!PyArg_ParseTupleAndKeywords(args, kwargs, "ii:startStreamingImages", kwlist, &what, &cameraNumber)) {
+		PyErr_SetString(PyExc_TypeError, "startStreamingImages expects an integer arguments. startStreamingImages(what: int, cameraNumber:int)->bool");
 		Py_RETURN_FALSE;
 	}
+
+	// todo : check numberNumber is in range of available cameras.
+	// the method captury_startStreamingImages accepts int cameraNumber, that number is what ? 0 to totalCameras-1 ?
+
+	if (Captury_startStreamingImages(what, cameraNumber))
+		Py_RETURN_TRUE;
+	Py_RETURN_FALSE;
+}
+
+static PyObject* startStreaming(PyObject *self, PyObject *args, PyObject* kwargs)
+{
+	static char *kwlist[] = {(char *)"what", NULL};
+	int cameraNumber;
+	int what;
+	if (!PyArg_ParseTupleAndKeywords(args, kwargs, "i:startStreaming", kwlist, &what, &cameraNumber)) {
+		PyErr_SetString(PyExc_TypeError, "startStreaming expects an integer arguments. startStreaming(what: int)->bool");
+		Py_RETURN_FALSE;
+	}
+
+	// todo : check numberNumber is in range of available cameras.
 
 	if (Captury_startStreaming(what))
 		Py_RETURN_TRUE;
@@ -87,7 +107,8 @@ static PyObject* setShotName(PyObject *self, PyObject *args)
 static PyMethodDef pythonVisibleMethods[] = {
 	{"connect", connect, METH_VARARGS, "Connect to host[, port=2101]"},
 	// {"getActors", getActors, METH_VARARGS, "Returns an array of actors"},
-	{"startStreaming", startStreaming, METH_VARARGS, "Starts streaming"},
+	{"startStreaming", (PyCFunction)startStreaming, METH_VARARGS | METH_KEYWORDS, "starts streaming "},
+	{"startStreamingImages", (PyCFunction)startStreamingImages, METH_VARARGS | METH_KEYWORDS, "Starts streaming data and images"},
 	{"stopStreaming", stopStreaming, METH_NOARGS, "Stops streaming"},
 	{"synchronizeTime", synchronizeTime, METH_NOARGS, "Stops streaming"},
 	{"getTime", getTime, METH_NOARGS, "Stops streaming"},
