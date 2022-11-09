@@ -355,7 +355,7 @@ static uint64_t getTime()
 	#else
 	std::chrono::time_point<std::chrono::system_clock> tp = std::chrono::system_clock::now();
 	std::chrono::duration<double, std::micro> duration = tp.time_since_epoch();
-	return duration.count();
+	return (uint64_t)duration.count();
 	#endif
 #else
 	timespec t;
