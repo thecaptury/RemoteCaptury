@@ -46,15 +46,61 @@
 
 typedef uint32_t uint;
 
+#if defined WIN32 || defined _WIN32 && !defined __CYGWIN__
+  static inline void atomicStore(int64_t* ptr, int64_t value) { InterlockedExchange64(ptr, value); }
+  static inline void atomicLoad(int64_t* srcPtr, int64_t* dstPtr) { *dstPtr = InterlockedOr64(srcPtr, 0); }
+#else
+  #if ((__GNUC__ * 100 + __GNUC_MINOR__ * 10) > 464)
+    #define atomicStore(dstPtr, value)	__atomic_store(dstPtr, &(value), __ATOMIC_RELAXED)
+    #define atomicLoad(srcPtr, dstPtr)	__atomic_load(srcPtr, dstPtr, __ATOMIC_RELAXED)
+  #else
+    #define atomicStore(where, what)	*(where) = (what);
+    #define atomicLoad(srcPtr, dstPtr)	*(dstPtr) = *(srcPtr);
+  #endif
+#endif
+
+#if defined(__clang__) && (!defined(SWIG))
+#define THREAD_ANNOTATION_ATTRIBUTE__(x)   __attribute__((x))
+#else
+#define THREAD_ANNOTATION_ATTRIBUTE__(x)   // no-op
+#endif
+
+#define CAPABILITY(x)		THREAD_ANNOTATION_ATTRIBUTE__(capability(x))
+#define GUARDED_BY(x)		THREAD_ANNOTATION_ATTRIBUTE__(guarded_by(x))
+#define REQUIRES(...)		THREAD_ANNOTATION_ATTRIBUTE__(requires_capability(__VA_ARGS__))
+#define ACQUIRE(...)		THREAD_ANNOTATION_ATTRIBUTE__(acquire_capability(__VA_ARGS__))
+#define RELEASE(...)		THREAD_ANNOTATION_ATTRIBUTE__(release_capability(__VA_ARGS__))
+
+
+#ifdef WIN32
+static HANDLE		thread;
+static CRITICAL_SECTION	mutex;
+static CRITICAL_SECTION	partialActorMutex;
+#define socklen_t	int
+#else
+#define SOCKET		int
+#define closesocket	close
+static pthread_t	thread;
+struct CAPABILITY("mutex") MutexStruct {
+	pthread_mutex_t	m;
+	MutexStruct()			{ pthread_mutex_init(&m, nullptr); }
+	void lock() ACQUIRE()		{ pthread_mutex_lock(&m); }
+	void unlock() RELEASE()		{ pthread_mutex_unlock(&m); }
+};
+static MutexStruct mutex;
+static MutexStruct partialActorMutex;
+// static pthread_mutex_t	mutex = PTHREAD_MUTEX_INITIALIZER;
+#endif
+
 static std::string currentDay;
 static std::string currentSession;
 static std::string currentShot;
 
 static int numCameras = -1;
 static std::vector<CapturyCamera> cameras;
-static std::vector<CapturyActor> actors; // current actors
-static std::vector<CapturyActor> partialActors; // actors that have been received in part
-static std::vector<CapturyActor> newActors; // actors that have just been received
+static std::vector<CapturyActor> actors GUARDED_BY(mutex); // current actors
+static std::vector<CapturyActor> partialActors GUARDED_BY(partialActorMutex); // actors that have been received in part
+static std::vector<CapturyActor> newActors GUARDED_BY(mutex); // actors that have just been received
 
 static CapturyLatencyPacket currentLatency;
 static uint64_t receivedPoseTime; // time pose packet was received
@@ -65,7 +111,7 @@ static uint64_t mostRecentPoseReceivedTime; // time pose was received
 static uint64_t mostRecentPoseReceivedTimestamp; // timestamp of that pose
 
 // actor id -> pointer to actor
-static std::map<int, CapturyActor*> actorsById;
+static std::map<int, CapturyActor*> actorsById GUARDED_BY(mutex);
 
 const char* CapturyActorStatusString[] = {"scaling", "tracking", "stopped", "deleted"};
 
@@ -93,7 +139,7 @@ struct ActorData {
 	ActorData() : scalingProgress(0), trackingQuality(100), inProgressPose(NULL), lastPoseTimestamp(0), status(ACTOR_DELETED), flags(0) { currentPose.numTransforms = 0; currentTextures.width = 0; currentTextures.height = 0; currentTextures.data = NULL; }
 };
 
-static std::map<int, ActorData> actorData;
+static std::map<int, ActorData> actorData GUARDED_BY(mutex);
 
 static std::map<int32_t, CapturyImage> currentImages;
 static std::map<int32_t, std::vector<int>> currentImagesReceivedPackets;
@@ -141,16 +187,6 @@ static CapturyARTagCallback arTagCallback = NULL;
 static CapturyImageCallback imageCallback = NULL;
 
 static bool		isThreadRunning = false;
-#ifdef WIN32
-static HANDLE		thread;
-static CRITICAL_SECTION	mutex;
-#define socklen_t	int
-#else
-#define SOCKET		int
-#define closesocket	close
-static pthread_t	thread;
-static pthread_mutex_t	mutex = PTHREAD_MUTEX_INITIALIZER;
-#endif
 static SOCKET		sock = -1;
 
 static volatile int	stopStreamThread = 0; // stop streaming thread
@@ -177,13 +213,13 @@ static inline void unlockMutex(CRITICAL_SECTION* critsec)
 	LeaveCriticalSection(critsec);
 }
 #else
-static inline void lockMutex(pthread_mutex_t* mtx)
+static inline void lockMutex(MutexStruct* mtx) ACQUIRE(mtx)
 {
-	pthread_mutex_lock(mtx);
+	mtx->lock();
 }
-static inline void unlockMutex(pthread_mutex_t* mtx)
+static inline void unlockMutex(MutexStruct* mtx) RELEASE(mtx)
 {
-	pthread_mutex_unlock(mtx);
+	mtx->unlock();
 }
 #endif
 
@@ -355,7 +391,7 @@ static uint64_t getTime()
 	#else
 	std::chrono::time_point<std::chrono::system_clock> tp = std::chrono::system_clock::now();
 	std::chrono::duration<double, std::micro> duration = tp.time_since_epoch();
-	return duration.count();
+	return (uint64_t)duration.count();
 	#endif
 #else
 	timespec t;
@@ -469,7 +505,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 						actor.joints[j].offset[x] = jp->offset[x];
 						actor.joints[j].orientation[x] = jp->orientation[x];
 					}
-					strncpy(actor.joints[j].name, jp->name, sizeof(actor.joints[j].name));
+					strncpy(actor.joints[j].name, jp->name, sizeof(actor.joints[j].name)-1);
 					at += sizeof(CapturyJointPacket2) + strlen(jp->name) + 1;
 				}
 				numTransmittedJoints = j + 1;
@@ -502,13 +538,17 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 				lockMutex(&mutex);
 				newActors.push_back(actor);
 				unlockMutex(&mutex);
-			} else
+			} else {
+				lockMutex(&partialActorMutex);
 				partialActors.push_back(actor);
+				unlockMutex(&partialActorMutex);
+			}
 			break; }
 		case capturyActorContinued:
 		case capturyActorContinued2: {
 			bool isActor1 = (p->type == capturyActorContinued);
 			CapturyActorContinuedPacket* cacp = (CapturyActorContinuedPacket*)&buf[0];
+			lockMutex(&partialActorMutex);
 			for (int i = 0; i < (int) partialActors.size(); ++i) {
 				if (partialActors[i].id != cacp->id)
 					continue;
@@ -518,7 +558,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 				if (isActor1) {
 					CapturyJointPacket* end = (CapturyJointPacket*)&buf[size];
 					for (int k = 0; j < actor.numJoints && &cacp->joints[k] < end; ++j, ++k) {
-						strncpy(actor.joints[j].name, cacp->joints[k].name, sizeof(actor.joints[j].name));
+						strncpy(actor.joints[j].name, cacp->joints[k].name, sizeof(actor.joints[j].name)-1);
 						actor.joints[j].parent = cacp->joints[k].parent;
 						for (int x = 0; x < 3; ++x) {
 							actor.joints[j].offset[x] = cacp->joints[k].offset[x];
@@ -535,7 +575,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 							actor.joints[j].offset[x] = jp->offset[x];
 							actor.joints[j].orientation[x] = jp->orientation[x];
 						}
-						strncpy(actor.joints[j].name, jp->name, sizeof(actor.joints[j].name));
+						strncpy(actor.joints[j].name, jp->name, sizeof(actor.joints[j].name)-1);
 						at += sizeof(CapturyJointPacket2) + strlen(jp->name) + 1;
 					}
 				}
@@ -553,6 +593,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 				// printf("received actor cont %d (%d/%d), missing %d\n", actor.id, j, actor.numJoints, packetsMissing);
 				break;
 			}
+			unlockMutex(&partialActorMutex);
 			break; }
 		case capturyCamera: {
 			CapturyCamera camera;
@@ -589,13 +630,15 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 			break; }
 		case capturyTime: {
 			CapturyTimePacket* tp = (CapturyTimePacket*)&buf[0];
-			timeOffset = 0;
+			int64_t zero = 0;
+			atomicStore(&timeOffset, zero);
 			uint64_t pongTime = getTime();
 			// we assume that the network transfer time is symmetric
 			// so the timestamp given in the packet was captured at (pingTime + pongTime) / 2
 			uint64_t t = (pongTime - pingTime) / 2 + pingTime;
-			timeOffset = tp->timestamp - t;
-			printf("local: %" PRIu64 " remote: %" PRIu64 " => offset %" PRId64 ", roundtrip %" PRId64 "\n", t, tp->timestamp, timeOffset, pongTime - pingTime);
+			int64_t delta = tp->timestamp - t;
+			atomicStore(&timeOffset, delta);
+			printf("local: %" PRIu64 " remote: %" PRIu64 " => offset %" PRId64 ", roundtrip %" PRId64 "\n", t, tp->timestamp, tp->timestamp - t, pongTime - pingTime);
 			break; }
 		case capturyCustom: {
 			CapturyCustomPacket* ccp = (CapturyCustomPacket*)&buf[0];
@@ -652,7 +695,9 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 			break; }
 		case capturyScalingProgress: {
 			CapturyScalingProgressPacket* spp = (CapturyScalingProgressPacket*)&buf[0];
+			lockMutex(&mutex);
 			actorData[spp->actor].scalingProgress = spp->progress;
+			unlockMutex(&mutex);
 			break; }
 		case capturyBackgroundQuality: {
 			CapturyBackgroundQualityPacket* bqp = (CapturyBackgroundQualityPacket*)&buf[0];
@@ -699,7 +744,7 @@ static bool sendPacket(CapturyRequestPacket* packet, CapturyPacketTypes expected
 	return received;
 }
 
-static void receivedPose(CapturyPose* pose, int actorId, ActorData* aData, uint64_t timestamp)
+static void receivedPose(CapturyPose* pose, int actorId, ActorData* aData, uint64_t timestamp) REQUIRES(mutex)
 {
 	if (getLocalPoses)
 		Captury_convertPoseToLocal(pose, actorId);
@@ -709,22 +754,27 @@ static void receivedPose(CapturyPose* pose, int actorId, ActorData* aData, uint6
 	uint64_t now = getTime();
 	aData->lastPoseTimestamp = now;
 
-	mostRecentPoseReceivedTime = now + timeOffset;
+	int64_t to;
+	atomicLoad(&timeOffset, &to);
+	mostRecentPoseReceivedTime = now + to;
 	mostRecentPoseReceivedTimestamp = timestamp;
-
-	unlockMutex(&mutex);
 
 	if (aData->status != ACTOR_SCALING && aData->status != ACTOR_TRACKING) {
 		aData->status = ACTOR_TRACKING;
-		if (actorChangedCallback)
+		if (actorChangedCallback) {
+			unlockMutex(&mutex);
 			actorChangedCallback(actorId, ACTOR_TRACKING);
+			lockMutex(&mutex);
+		}
 	}
 
 	if (newPoseCallback != NULL) {
-		if (actorsById[actorId])
-			newPoseCallback(actorsById[actorId], pose, aData->trackingQuality);
-		else {
+		if (actorsById[actorId]) {
+			CapturyActor* actor = actorsById[actorId];
+			unlockMutex(&mutex);
+			newPoseCallback(actor, pose, aData->trackingQuality);
 			lockMutex(&mutex);
+		} else {
 			bool added = false;
 			while (!newActors.empty()) {
 				CapturyActor& actor = newActors.back();
@@ -739,7 +789,6 @@ static void receivedPose(CapturyPose* pose, int actorId, ActorData* aData, uint6
 				for (CapturyActor& actor : actors)
 					actorsById[actor.id] = &actor;
 			}
-			unlockMutex(&mutex);
 
 			if (actorsById.count(actorId) == 0 || actorsById[actorId] == nullptr) {
 				CapturyRequestPacket packet;
@@ -747,8 +796,12 @@ static void receivedPose(CapturyPose* pose, int actorId, ActorData* aData, uint6
 				packet.size = sizeof(packet);
 
 				sendPacket(&packet, capturyActors);
-			} else
-				newPoseCallback(actorsById[actorId], pose, aData->trackingQuality);
+			} else {
+				CapturyActor* actor = actorsById[actorId];
+				unlockMutex(&mutex);
+				newPoseCallback(actor, pose, aData->trackingQuality);
+				lockMutex(&mutex);
+			}
 		}
 	}
 
@@ -759,8 +812,11 @@ static void receivedPose(CapturyPose* pose, int actorId, ActorData* aData, uint6
 			continue;
 
 		if (it->second.status == ACTOR_SCALING || it->second.status == ACTOR_TRACKING) {
-			if (actorChangedCallback)
+			if (actorChangedCallback) {
+				unlockMutex(&mutex);
 				actorChangedCallback(it->first, ACTOR_STOPPED);
+				lockMutex(&mutex);
+			}
 			it->second.status = ACTOR_STOPPED;
 		}
 	}
@@ -863,7 +919,9 @@ static void* streamLoop(void* arg)
 			continue;
 		}
 
-		dataAvailableTime = getTime() + timeOffset;
+		int64_t to;
+		atomicLoad(&timeOffset, &to);
+		dataAvailableTime = getTime() + to;
 
 		char buf[10000];
 		CapturyPosePacket* cpp = (CapturyPosePacket*)&buf[0];
@@ -886,7 +944,7 @@ static void* streamLoop(void* arg)
 			break;
 		}
 
-		dataReceivedTime = getTime() + timeOffset;
+		dataReceivedTime = getTime() + to;
 
 		if (cpp->type == capturyStreamAck) {
 			lastHeartbeat = time(nullptr);
@@ -899,14 +957,15 @@ static void* streamLoop(void* arg)
 			//printf("received image data for actor %x (payload %d bytes)\n", cip->actor, cip->size-16);
 
 			// check if we have a texture already
+			lockMutex(&mutex);
 			std::map<int, ActorData>::iterator it = actorData.find(cip->actor);
 			if (it == actorData.end()) {
+				unlockMutex(&mutex);
 				printf("received image data for actor %x without having received image header\n", cip->actor);
 				continue;
 			}
 
 			// copy data from packet into the buffer
-			lockMutex(&mutex);
 			const int imgSize = it->second.currentTextures.width * it->second.currentTextures.height * 3;
 
 			// check if packet fits
@@ -1047,7 +1106,9 @@ static void* streamLoop(void* arg)
 			printf("received actorModeChanged packet %x %d\n", amc->actor, amc->mode);
 			if (actorChangedCallback != NULL)
 				actorChangedCallback(amc->actor, amc->mode);
+			lockMutex(&mutex);
 			actorData[amc->actor].status = (CapturyActorStatus)amc->mode;
+			unlockMutex(&mutex);
 			continue;
 		}
 		if (cpp->type == capturyPoseCont) {
@@ -1061,7 +1122,8 @@ static void* streamLoop(void* arg)
 			}
 
 			std::map<int, ActorData>::iterator it = actorData.find(cpp->actor);
-			if (cpp->timestamp != it->second.inProgressTimestamp) {
+			ActorData& aData = it->second;
+			if (cpp->timestamp != aData.inProgressTimestamp) {
 				lastErrorMessage = "pose continuation packet for wrong timestamp";
 				unlockMutex(&mutex);
 				continue;
@@ -1071,18 +1133,19 @@ static void* streamLoop(void* arg)
 
 			int numBytesToCopy = size - (int)((char*)cpc->values - (char*)cpc);
 			int totalBytes = actorsById[cpp->actor]->numJoints * sizeof(float) * 6;
-			if (it->second.inProgressBytesDone + numBytesToCopy > totalBytes) {
+			if (aData.inProgressBytesDone + numBytesToCopy > totalBytes) {
 				lastErrorMessage = "pose continuation too large";
 				unlockMutex(&mutex);
 				continue;
 			}
 
-			memcpy((char*)it->second.inProgressPose + it->second.inProgressBytesDone, cpc->values, numBytesToCopy);
-			it->second.inProgressBytesDone += numBytesToCopy;
-			if (it->second.inProgressBytesDone == totalBytes) {
-				memcpy(it->second.currentPose.transforms, it->second.inProgressPose, totalBytes);
-				receivedPose(&it->second.currentPose, cpc->actor, &actorData[cpc->actor], it->second.inProgressTimestamp);
+			memcpy(((char*)aData.inProgressPose) + aData.inProgressBytesDone, cpc->values, numBytesToCopy);
+			aData.inProgressBytesDone += numBytesToCopy;
+			if (aData.inProgressBytesDone == totalBytes) {
+				memcpy(aData.currentPose.transforms, aData.inProgressPose, totalBytes);
+				receivedPose(&aData.currentPose, cpc->actor, &actorData[cpc->actor], aData.inProgressTimestamp);
 			}
+			unlockMutex(&mutex);
 			continue;
 		}
 
@@ -1120,7 +1183,7 @@ static void* streamLoop(void* arg)
 		float* values;
 		int at;
 		if (cpp->type == capturyPose) {
-			// printf("actor %x: %g\n", cpp->actor, cpp->values[0]);
+			// printf("actor %x: %d values: %g\n", cpp->actor, cpp->numValues, cpp->values[0]);
 			numValues = cpp->numValues;
 			values = cpp->values;
 			at = (int)((char*)(cpp->values) - (char*)cpp);
@@ -1160,14 +1223,15 @@ static void* streamLoop(void* arg)
 				it->second.inProgressPose = new float[numValues];
 			copyTo = it->second.inProgressPose;
 			it->second.inProgressTimestamp = cpp->timestamp;
+			lockMutex(&mutex);
 		}
 
 		memcpy(copyTo, values, numBytesToCopy);
 
 		if (numBytesToCopy == numValues * (int)sizeof(float))
 			receivedPose(&it->second.currentPose, cpp->actor, &it->second, cpp->timestamp);
-		else
-			unlockMutex(&mutex);
+
+		unlockMutex(&mutex);
 
 	} while (!stopStreamThread);
 
@@ -1210,7 +1274,9 @@ extern "C" int Captury_connect(const char* ip, unsigned short port)
 extern "C" int Captury_connect2(const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort)
 {
 	if (sock == -1) {
+		lockMutex(&mutex);
 		actors.reserve(32);
+		unlockMutex(&mutex);
 
 #ifdef WIN32
 		WSADATA init;
@@ -1299,10 +1365,7 @@ extern "C" int Captury_disconnect()
 	pthread_join(thread, &retVal);
 #endif
 
-#ifdef WIN32
-	DeleteCriticalSection(&mutex);
-#endif
-
+	lockMutex(&mutex);
 	for (int i = 0; i < (int) actors.size(); ++i) {
 		if (actors[i].joints != nullptr) {
 			delete[] actors[i].joints;
@@ -1323,6 +1386,12 @@ extern "C" int Captury_disconnect()
 		if (it->second.currentTextures.data != NULL)
 			free(it->second.currentTextures.data);
 	}
+	unlockMutex(&mutex);
+
+#ifdef WIN32
+	DeleteCriticalSection(&mutex);
+	DeleteCriticalSection(&partialActorMutex);
+#endif
 
 	return 1;
 }
@@ -1386,8 +1455,9 @@ extern "C" const CapturyActor* Captury_getActor(int id)
 	// if the actor is already known, we don't have to ask the server
 	for (int i = 0; i < (int) actors.size(); ++i) {
 		if (actors[i].id == id) {
+			CapturyActor* actor = &actors[i];
 			unlockMutex(&mutex);
-			return &actors[i];
+			return actor;
 		}
 	}
 	unlockMutex(&mutex);
@@ -1418,12 +1488,16 @@ extern "C" const CapturyActor* Captury_getActor(int id)
 	actorsById.clear();
 	for (int i = 0; i < (int) actors.size(); ++i)
 		actorsById[actors[i].id] = &actors[i];
-	unlockMutex(&mutex);
 
 	for (int i = 0; i < (int) actors.size(); ++i) {
-		if (actors[i].id == id)
-			return &actors[i];
+		if (actors[i].id == id) {
+			CapturyActor* actor = &actors[i];
+			unlockMutex(&mutex);
+			return actor;
+		}
 	}
+	unlockMutex(&mutex);
+
 	return NULL;
 }
 
@@ -1520,7 +1594,7 @@ extern "C" int Captury_stopStreaming()
 	if (sock == -1)
 		return 0;
 
-	stopStreamThread = true;
+	stopStreamThread = 1;
 
 #ifdef WIN32
 	WaitForSingleObject(thread, 1000);
@@ -1545,25 +1619,29 @@ extern "C" CapturyPose* Captury_getCurrentPoseAndTrackingConsistencyForActor(int
 	// check whether any actor changed status
 	uint64_t now = getTime() - 500000; // half a second ago
 	bool stillCurrent = true;
+	lockMutex(&mutex);
 	for (std::map<int, ActorData>::iterator it = actorData.begin(); it != actorData.end(); ++it) {
 		if (it->second.lastPoseTimestamp > now) // still current
 			continue;
 
 		if (it->second.status == ACTOR_SCALING || it->second.status == ACTOR_TRACKING) {
 			it->second.status = ACTOR_STOPPED;
-			if (actorChangedCallback)
+			if (actorChangedCallback) {
+				unlockMutex(&mutex);
 				actorChangedCallback(it->first, ACTOR_STOPPED);
+				lockMutex(&mutex);
+			}
 			if (it->first == actorId)
 				stillCurrent = false;
 		}
 	}
 	if (!stillCurrent) {
 		lastErrorMessage = "actor has disappeared";
+		unlockMutex(&mutex);
 		return NULL;
 	}
 
 //	uint64_t now = getTime();
-	lockMutex(&mutex);
 	std::map<int, ActorData>::iterator it = actorData.find(actorId);
 	if (it == actorData.end()) {
 		char buf[400];
@@ -1663,9 +1741,12 @@ extern "C" int Captury_requestTexture(int actorId)
 extern "C" CapturyImage* Captury_getTexture(int actorId)
 {
 	// check if we don't have a texture yet
+	lockMutex(&mutex);
 	std::map<int, ActorData>::iterator it = actorData.find(actorId);
-	if (it == actorData.end())
+	if (it == actorData.end()) {
+		unlockMutex(&mutex);
 		return 0;
+	}
 
 	// create a copy of all data
 	const int size = it->second.currentTextures.width * it->second.currentTextures.height * 3;
@@ -1677,7 +1758,6 @@ extern "C" CapturyImage* Captury_getTexture(int actorId)
 	image->data = (unsigned char*)&image[1];
 	image->gpuData = nullptr;
 
-	lockMutex(&mutex);
 	memcpy(image->data, it->second.currentTextures.data, size);
 	unlockMutex(&mutex);
 
@@ -1722,21 +1802,31 @@ extern "C" uint64_t Captury_getMarkerTransform(int actorId, int joint, CapturyTr
 
 	*trafo = markerTransforms[aj].trafo;
 
-	return markerTransforms[aj].timestamp + timeOffset;
+	int64_t to;
+	atomicLoad(&timeOffset, &to);
+	return markerTransforms[aj].timestamp + to;
 }
 
 extern "C" int Captury_getScalingProgress(int actorId)
 {
-	return actorData[actorId].scalingProgress;
+	lockMutex(&mutex);
+	int scaling = actorData[actorId].scalingProgress;
+	unlockMutex(&mutex);
+	return scaling;
 }
 
 extern "C" int Captury_getTrackingQuality(int actorId)
 {
+	lockMutex(&mutex);
 	auto it = actorData.find(actorId);
-	if (it == actorData.end())
+	if (it == actorData.end()) {
+		unlockMutex(&mutex);
 		return 0;
+	}
+	int quality = it->second.trackingQuality;
+	unlockMutex(&mutex);
 
-	return it->second.trackingQuality;
+	return quality;
 }
 
 // change the name of the actor
@@ -1850,12 +1940,16 @@ extern "C" uint64_t Captury_synchronizeTime()
 
 extern "C" uint64_t Captury_getTime()
 {
-	return getTime() + timeOffset;
+	int64_t to;
+	atomicLoad(&timeOffset, &to);
+	return getTime() + to;
 }
 
 extern "C" int64_t Captury_getTimeOffset()
 {
-	return timeOffset;
+	int64_t to;
+	atomicLoad(&timeOffset, &to);
+	return to;
 }
 
 extern "C" int Captury_setHalfplaneConstraint(int actorId, int jointIndex, float* originOffset, float* normal, float offset, uint64_t timestamp, float weight)
@@ -2223,7 +2317,7 @@ static void decompose(const float* mat, float* euler) // checked
 // 	printf("%.4f %.4f %.4f  %.4f\n", mat[12], mat[13], mat[14], mat[15]);
 // }
 
-void Captury_convertPoseToLocal(CapturyPose* pose, int actorId)
+void Captury_convertPoseToLocal(CapturyPose* pose, int actorId) REQUIRES(mutex)
 {
 	CapturyActor* actor = actorsById[actorId];
 	CapturyTransform* at = pose->transforms;

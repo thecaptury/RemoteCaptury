@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 2.8)
+cmake_minimum_required(VERSION 3.0)
 
 if (OpenMP_C_FLAGS)
 	string(REPLACE ${OpenMP_C_FLAGS} "" CMAKE_C_FLAGS ${CMAKE_C_FLAGS})
@@ -33,6 +33,12 @@ if (TARGET Python3::Python)
 			PREFIX ""
 			OUTPUT_NAME "remotecaptury"
 			LINKER_LANGUAGE C
-			FOLDER "libraries"
 	)
+	if (WIN32)
+		set_target_properties(RemoteCapturyPython
+			PROPERTIES
+				SUFFIX ".pyd"
+				FOLDER "plugins"
+		)
+	endif (WIN32)
 endif (TARGET Python3::Python)
