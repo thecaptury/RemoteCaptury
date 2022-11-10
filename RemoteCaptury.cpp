@@ -1273,6 +1273,10 @@ extern "C" int Captury_connect(const char* ip, unsigned short port)
 // returns 1 if successful, 0 otherwise
 extern "C" int Captury_connect2(const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort)
 {
+#ifdef WIN32
+	InitializeCriticalSection(&mutex);
+#endif
+
 	if (sock == -1) {
 		lockMutex(&mutex);
 		actors.reserve(32);
@@ -1329,10 +1333,6 @@ extern "C" int Captury_connect2(const char* ip, unsigned short port, unsigned sh
 	tv.tv_sec = 0;  /* 100 milliseconds Timeout */
 	tv.tv_usec = 100000;
 	setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (char *)&tv, sizeof(struct timeval));
-
-#ifdef WIN32
-	InitializeCriticalSection(&mutex);
-#endif
 
 #ifndef WIN32
 	char buf[100];
