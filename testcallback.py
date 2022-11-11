@@ -1,5 +1,7 @@
 # add location of remotecaptury.pyd or remotecaptury.so
-path = "./build/Release/"
+import os
+path = os.path.abspath("../../devmode/plugins/RemoteCaptury/Release")
+print(f"adding {path} to sys.path")
 import sys
 sys.path.append(path)
 
