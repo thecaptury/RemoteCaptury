@@ -73,7 +73,7 @@ PyDoc_STRVAR(setNewImageCallback_doc_, R"(
 	This method allows to register a python callback that will be called when a new image is available.
 	:param callback: a python function that will be called when a new image is available.
 	:type callback: function
-)");
+	)");
 static PyObject* setNewImageCallback(PyObject *self, PyObject *args, PyObject* kwargs)
 {
 	static char *kwlist[] = {(char *)"callback", NULL};
@@ -107,7 +107,6 @@ static PyObject* startStreaming(PyObject *self, PyObject *args, PyObject* kwargs
 	int cameraNumber;
 	int what;
 	if (!PyArg_ParseTupleAndKeywords(args, kwargs, "i:startStreaming", kwlist, &what, &cameraNumber)) {
-		PyErr_SetString(PyExc_TypeError, "startStreaming expects an integer arguments. startStreaming(what: int)->bool");
 		Py_RETURN_FALSE;
 	}
 
