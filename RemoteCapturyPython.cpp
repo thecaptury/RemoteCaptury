@@ -13,15 +13,15 @@ static void capturyImageCallback(const CapturyImage* image)
 	// call pythonCallBack with thread safe
 
 	if (pythonCallBack!=NULL) {
-		// numpy image from CapturyImage data
-		/* npy_intp dims[3] = { image->height, image->width, 3 };
-		PyObject* pyImage = PyArray_SimpleNewFromData(3, dims, NPY_UINT8, image->data);
-		PyObject* args = PyTuple_New(1);
-		PyTuple_SetItem(args, 0, pyImage); */
+
 		PyGILState_STATE gstate;
 		gstate = PyGILState_Ensure();
-		PyObject* result = PyObject_CallNoArgs(pythonCallBack);
+
+		PyObject* args = NULL;
+		PyObject* result = PyObject_CallObject(pythonCallBack, args);
+
 		PyGILState_Release(gstate);
+
 	}
 	else {
 		printf("pythonCallBack is NULL. Please set a callback first");
