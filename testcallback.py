@@ -9,25 +9,38 @@ sys.path.append(path)
 import remotecaptury as rc
 import time
 
-print(f"start-")
-def callback(args):
-	print("callback - python")
-	print(f"type of image = {type(args)}")
-	print(args)
+log_path = os.path.abspath("./testcallback.log")
+log_path2 = os.path.abspath("./testcallback2.log")
+count = 0
+
+def callback():
+	global count
+	count += 1
+	with open(log_path, "a") as f:
+		f.write(f"callback {count}\n")
+
+def callback2():
+	global count
+	count += 1
+	with open(log_path2, "a") as f:
+		f.write(f"callback2 {count}\n")
 
 # start streaming images.
 print(f"trying to connect")
-connected = rc.connect(host = '127.0.0.1')
+host = "127.0.0.1"
+connected = rc.connect(host = host)
 print(f"is_connected = {connected}")
 
-streaming_start = rc.startStreamingImages(0, 0)
+callback_registered = rc.setNewImageCallback(callback)
+print(f"is_callback_registered = {callback_registered}")
+
+streaming_start = rc.startStreamingImages(cameraNumber=0)
 print(f"is_streaming = {streaming_start}")
 
-if (streaming_start):
-	# set new callback function.
-	callback_registered = rc.setNewImageCallback(callback)
-	print(f"is_callback_registered = {callback_registered}")
+time.sleep(3)
 
-	# wait for 10 seconds.
-	print(f"waiting for 10 seconds to receive images")
-	time.sleep(10)
+callback_registered = rc.setNewImageCallback(callback2)
+print(f"is_callback2_registered = {callback_registered}")
+time.sleep(3)
+
+streaming_stop = rc.stopStreaming()
