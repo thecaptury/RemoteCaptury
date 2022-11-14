@@ -56,7 +56,7 @@ endif (NOT TARGET Python3::Python) ]]
 
 if (TARGET Python3::Python)
 	add_library(RemoteCapturyPython SHARED RemoteCapturyPython.cpp RemoteCaptury.cpp)
-	target_link_libraries(RemoteCapturyPython Python3::Python)
+	target_link_libraries(RemoteCapturyPython Python3::Python Python3::NumPy)
 	set_target_properties(RemoteCapturyPython
 		PROPERTIES
 			PREFIX ""

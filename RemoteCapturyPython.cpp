@@ -53,6 +53,7 @@ static PyObject* startStreamingImages(PyObject *self, PyObject *args, PyObject* 
 
 	const CapturyCamera* camera;
 	int numCameras = Captury_getCameras(&camera);
+	printf("startStreamingImages: found numCameras: %d\n", numCameras);
 
 	if (numCameras == 0)
 		Py_RETURN_FALSE;
