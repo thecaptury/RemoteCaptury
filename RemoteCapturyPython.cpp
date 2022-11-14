@@ -1,9 +1,9 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include "RemoteCaptury.h"
-/* #define NO_IMPORT_ARRAY
+// #define NO_IMPORT_ARRAY
 #define PY_ARRAY_UNIQUE_SYMBOL PyArrayHandle
-#include "numpy/arrayobject.h" */
+#include "numpy/arrayobject.h"
 
 static PyObject* pythonCallBack; // global variable to store the python callback function
 
