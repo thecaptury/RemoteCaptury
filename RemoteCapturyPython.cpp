@@ -1,9 +1,7 @@
 #define PY_SSIZE_T_CLEAN
+#include "numpy/arrayobject.h"
 #include <Python.h>
 #include "RemoteCaptury.h"
-// #define NO_IMPORT_ARRAY
-#define PY_ARRAY_UNIQUE_SYMBOL PyArrayHandle
-#include "numpy/arrayobject.h"
 
 static PyObject* pythonCallBack; // global variable to store the python callback function
 
@@ -11,21 +9,32 @@ static void capturyImageCallback(const CapturyImage* image)
 {
 
 	// call pythonCallBack with thread safe
-
+	PyGILState_STATE gstate;
+	gstate = PyGILState_Ensure();
+	assert(PyArray_API);
 	if (pythonCallBack!=NULL) {
 
-		PyGILState_STATE gstate;
-		gstate = PyGILState_Ensure();
+		PyObject* args = PyTuple_New(3);
+		printf("capturyImageCallback: crating a 1d numpy array\n");
+		// create a numpy array from of 1 dimension with shape : image->width * image->height * 3
+		npy_intp dims[1] = { image->width * image->height * 3 };
+		PyObject* array = PyArray_SimpleNewFromData(1, dims, NPY_UINT8, image->data);
 
-		PyObject* args = NULL;
+		// PyObject* array = PyArray_ZEROS(1, dims, NPY_UINT8, 0);
+		// method of memcpy from image->data to array
+		// memcpy(PyArray_DATA((PyArrayObject*)array), image->data, image->width * image->height * 3);
+
+		printf("capturyImageCallback: filling the tuple\n");
+		PyTuple_SetItem(args, 0, array);
+		PyTuple_SetItem(args, 1, PyLong_FromLong(image->width));
+		PyTuple_SetItem(args, 2, PyLong_FromLong(image->height));
+
 		PyObject* result = PyObject_CallObject(pythonCallBack, args);
-
-		PyGILState_Release(gstate);
-
 	}
 	else {
 		printf("pythonCallBack is NULL. Please set a callback first");
 	}
+	PyGILState_Release(gstate);
 }
 
 static PyObject* connect(PyObject *self, PyObject *args, PyObject* kwargs)
@@ -197,5 +206,9 @@ static PyModuleDef rcModule = {
 PyMODINIT_FUNC
 PyInit_remotecaptury(void)
 {
+	import_array();
+	if(PyErr_Occurred()) {
+		Py_FatalError("can't initialize module remotecaptury");
+	}
 	return PyModule_Create(&rcModule);
 }
