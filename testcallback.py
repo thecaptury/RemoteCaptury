@@ -23,8 +23,8 @@ count = 0
 def callback(*args):
 	global count
 	count += 1
-	image, width, height = args
-	image = image.reshape(height, width, 3)
+	image = args[0]
+	# image = image.reshape(height, width, 3)
 	print(f"min max of image : {np.min(image)} {np.max(image)}, dtype : {image.dtype}")
 	if isinstance(image, np.ndarray):
 		print(image.shape)
