@@ -11,24 +11,24 @@ static void capturyImageCallback(const CapturyImage* image)
 	// call pythonCallBack with thread safe
 	PyGILState_STATE gstate;
 	gstate = PyGILState_Ensure();
-	assert(PyArray_API);
+	assert(PyArray_API); // check if numpy is initialised in PyInit_module. If not, the program will crash here
 	if (pythonCallBack!=NULL) {
 
-		PyObject* args = PyTuple_New(3);
-		printf("capturyImageCallback: crating a 1d numpy array\n");
-		// create a numpy array from of 1 dimension with shape : image->width * image->height * 3
-		npy_intp dims[1] = { image->width * image->height * 3 };
-		PyObject* array = PyArray_SimpleNewFromData(1, dims, NPY_UINT8, image->data);
+		npy_intp dims[3] = { image->height, image->width, 3};
+		PyObject* array = PyArray_ZEROS(3, dims, NPY_UINT8, 0);
+		// PyObject* array = PyArray_SimpleNew(3, dims, NPY_UINT8);
+		uint8_t* ptr1 = image->data;
+		for(int r=0; r<image->height; r++) {
+			for(int c=0;c <image->width; c++,ptr1 +=3) {
+				// set the value in numpy array in 3 dimensions
+				PyArray_SETITEM(array, PyArray_GETPTR3(array, r, c, 0), PyLong_FromLong(ptr1[0]));
+				PyArray_SETITEM(array, PyArray_GETPTR3(array, r, c, 1), PyLong_FromLong(ptr1[1]));
+				PyArray_SETITEM(array, PyArray_GETPTR3(array, r, c, 2), PyLong_FromLong(ptr1[2]));
+			}
+		}
 
-		// PyObject* array = PyArray_ZEROS(1, dims, NPY_UINT8, 0);
-		// method of memcpy from image->data to array
-		// memcpy(PyArray_DATA((PyArrayObject*)array), image->data, image->width * image->height * 3);
-
-		printf("capturyImageCallback: filling the tuple\n");
+		PyObject* args = PyTuple_New(1);
 		PyTuple_SetItem(args, 0, array);
-		PyTuple_SetItem(args, 1, PyLong_FromLong(image->width));
-		PyTuple_SetItem(args, 2, PyLong_FromLong(image->height));
-
 		PyObject* result = PyObject_CallObject(pythonCallBack, args);
 	}
 	else {
