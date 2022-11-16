@@ -47,7 +47,9 @@ static PyObject* connect(PyObject *self, PyObject *args, PyObject* kwargs)
 	}
 
 	if (Captury_connect(host, port) == 1) {
-		Py_RETURN_TRUE; // success
+		if(Captury_synchronizeTime() != 0) {
+			Py_RETURN_TRUE;
+		}
 	}
 	Py_RETURN_FALSE;
 }
