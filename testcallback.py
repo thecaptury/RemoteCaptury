@@ -37,12 +37,16 @@ print(f"trying to connect")
 host = "127.0.0.1"
 connected = rc.connect(host = host)
 print(f"is_connected = {connected}")
+if not connected:
+	exit(1)
 
 callback_registered = rc.setNewImageCallback(callback)
 print(f"is_callback_registered = {callback_registered}")
 
 streaming_start = rc.startStreamingImages(cameraNumber=0)
 print(f"is_streaming = {streaming_start}")
+if not streaming_start:
+	exit(1)
 
 time.sleep(3)
 
