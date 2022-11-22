@@ -1275,6 +1275,7 @@ extern "C" int Captury_connect2(const char* ip, unsigned short port, unsigned sh
 {
 #ifdef WIN32
 	InitializeCriticalSection(&mutex);
+	InitializeCriticalSection(&partialActorMutex);
 #endif
 
 	if (sock == -1) {
@@ -1652,16 +1653,16 @@ extern "C" CapturyPose* Captury_getCurrentPoseAndTrackingConsistencyForActor(int
 			lastErrorMessage += buf;
 		}
 		unlockMutex(&mutex);
-		return 0;
+		return NULL;
 	}
 
 	if (it->second.currentPose.numTransforms == 0) {
 		unlockMutex(&mutex);
 		lastErrorMessage = "most recent pose is empty";
-		return 0;
+		return NULL;
 	}
 
-	CapturyPose* pose = (CapturyPose*) malloc(sizeof(CapturyPose) + it->second.currentPose.numTransforms * sizeof(float) * 6);
+	CapturyPose* pose = (CapturyPose*)malloc(sizeof(CapturyPose) + it->second.currentPose.numTransforms * sizeof(float) * 6);
 	pose->actor = actorId;
 	pose->timestamp = it->second.currentPose.timestamp;
 	pose->numTransforms = it->second.currentPose.numTransforms;
