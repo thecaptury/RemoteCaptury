@@ -42,3 +42,12 @@ if (TARGET Python3::Python)
 		)
 	endif (WIN32)
 endif (TARGET Python3::Python)
+
+if (ANDROID_NDK_FOUND)
+	configure_file(${CMAKE_CURRENT_SOURCE_DIR}/Android.mk jni/Android.mk)
+	configure_file(${CMAKE_CURRENT_SOURCE_DIR}/Application.mk jni/Application.mk)
+	add_custom_target(RemoteCapturyAndroid
+		COMMAND ${CMAKE_COMMAND} -E env NDK_LIBS_OUT=${CMAKE_CURRENT_BINARY_DIR} ${ANDROID_NDK_BUILD}
+		DEPENDS RemoteCaptury.cpp RemoteCaptury.h
+	)
+endif(ANDROID_NDK_FOUND)
