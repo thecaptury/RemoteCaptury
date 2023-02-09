@@ -117,26 +117,39 @@ const char* CapturyActorStatusString[] = {"scaling", "tracking", "stopped", "del
 
 struct ActorData {
 	// actor id -> scaling progress (0 to 100)
-	int                     scalingProgress;
+	int			scalingProgress;
 	// actor id -> tracking quality (0 to 100)
 	int			trackingQuality;
 	// actor id -> pose
-	CapturyPose             currentPose;
-	float*			inProgressPose;
-	int			inProgressBytesDone;
-	uint64_t		inProgressTimestamp;
+	CapturyPose		currentPose;
+	struct InProgress {
+		float*			pose;
+		int			bytesDone;
+		uint64_t		timestamp;
+	};
+	InProgress		inProgress[4];
 	// actor id -> timestamp
-	uint64_t                lastPoseTimestamp;
+	uint64_t		lastPoseTimestamp;
 
 	// actor id -> texture
-	CapturyImage            currentTextures;
-	std::vector<int>        receivedPackets;
+	CapturyImage		currentTextures;
+	std::vector<int>	receivedPackets;
 
 	CapturyActorStatus	status;
 
 	int			flags;
 
-	ActorData() : scalingProgress(0), trackingQuality(100), inProgressPose(NULL), lastPoseTimestamp(0), status(ACTOR_DELETED), flags(0) { currentPose.numTransforms = 0; currentTextures.width = 0; currentTextures.height = 0; currentTextures.data = NULL; }
+	ActorData() : scalingProgress(0), trackingQuality(100), lastPoseTimestamp(0), status(ACTOR_DELETED), flags(0)
+	{
+		currentPose.numTransforms = 0;
+		currentTextures.width = 0;
+		currentTextures.height = 0;
+		currentTextures.data = NULL;
+		for (int i = 0; i < 4; ++i) {
+			inProgress[i].pose = NULL;
+			inProgress[i].timestamp = 0;
+		}
+	}
 };
 
 static std::map<int, ActorData> actorData GUARDED_BY(mutex);
@@ -348,6 +361,12 @@ const char* Captury_getHumanReadableMessageType(CapturyPacketTypes type)
 		return "<actor2 continued>";
 	case capturyLatency:
 		return "<latency measurements>";
+	case capturyActors2:
+		return "<actors2>";
+	case capturyActor3:
+		return "<actor3>";
+	case capturyActorContinued3:
+		return "<actor3 continued>";
 	case capturyError:
 		return "<error>";
 	}
@@ -460,8 +479,8 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 			printf("expecting %d actor packets\n", cap->numActors);
 			if (expect == capturyActors) {
 				if (cap->numActors != 0) {
-					packetsMissing =  cap->numActors;
-					expect = capturyActor;
+					packetsMissing = cap->numActors;
+					expect = capturyActor2;
 				}
 			}
 			numRetries += packetsMissing;
@@ -476,7 +495,8 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 			numRetries += packetsMissing;
 			break; }
 		case capturyActor:
-		case capturyActor2: {
+		case capturyActor2:
+		case capturyActor3: {
 			CapturyActor actor;
 			CapturyActorPacket* cap = (CapturyActorPacket*)&buf[0];
 			strncpy(actor.name, cap->name, sizeof(actor.name));
@@ -485,28 +505,44 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 			actor.joints = new CapturyJoint[actor.numJoints];
 			char* at = (char*)cap->joints;
 			char* end = buf + size;
-			bool isActor1 = (p->type == capturyActor);
+			int version = (p->type == capturyActor) ? 1 : (p->type == capturyActor2) ? 2 : 3;
 
 			int numTransmittedJoints = 0;
 			for (int j = 0; at < end; ++j) {
-				if (isActor1) {
+				switch (version) {
+				case 1: {
 					CapturyJointPacket* jp = (CapturyJointPacket*)at;
 					actor.joints[j].parent = jp->parent;
 					for (int x = 0; x < 3; ++x) {
 						actor.joints[j].offset[x] = jp->offset[x];
 						actor.joints[j].orientation[x] = jp->orientation[x];
+						actor.joints[j].scale[x] = 1.0f;
 					}
 					strncpy(actor.joints[j].name, jp->name, sizeof(actor.joints[j].name));
 					at += sizeof(CapturyJointPacket);
-				} else {
+					break; }
+				case 2: {
 					CapturyJointPacket2* jp = (CapturyJointPacket2*)at;
 					actor.joints[j].parent = jp->parent;
 					for (int x = 0; x < 3; ++x) {
 						actor.joints[j].offset[x] = jp->offset[x];
 						actor.joints[j].orientation[x] = jp->orientation[x];
+						actor.joints[j].scale[x] = 1.0f;
 					}
 					strncpy(actor.joints[j].name, jp->name, sizeof(actor.joints[j].name)-1);
 					at += sizeof(CapturyJointPacket2) + strlen(jp->name) + 1;
+					break; }
+				case 3: {
+					CapturyJointPacket3* jp = (CapturyJointPacket3*)at;
+					actor.joints[j].parent = jp->parent;
+					for (int x = 0; x < 3; ++x) {
+						actor.joints[j].offset[x] = jp->offset[x];
+						actor.joints[j].orientation[x] = jp->orientation[x];
+						actor.joints[j].scale[x] = jp->scale[x];
+					}
+					strncpy(actor.joints[j].name, jp->name, sizeof(actor.joints[j].name)-1);
+					at += sizeof(CapturyJointPacket3) + strlen(jp->name) + 1;
+					break; }
 				}
 				numTransmittedJoints = j + 1;
 			}
@@ -528,7 +564,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 				}
 			}
 			if (numTransmittedJoints < actor.numJoints) {
-				expect = isActor1 ? capturyActorContinued : capturyActorContinued2;
+				expect = (version == 1) ? capturyActorContinued : (version == 2) ? capturyActorContinued2 : capturyActorContinued3;
 				numRetries += 1;
 			}
 			//printf("received actor %d (%d/%d), missing %d\n", actor.id, numTransmittedJoints, actor.numJoints, packetsMissing);
@@ -545,8 +581,9 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 			}
 			break; }
 		case capturyActorContinued:
-		case capturyActorContinued2: {
-			bool isActor1 = (p->type == capturyActorContinued);
+		case capturyActorContinued2:
+		case capturyActorContinued3: {
+			int version = (p->type == capturyActor) ? 1 : (p->type == capturyActor2) ? 2 : 3;
 			CapturyActorContinuedPacket* cacp = (CapturyActorContinuedPacket*)&buf[0];
 			lockMutex(&partialActorMutex);
 			for (int i = 0; i < (int) partialActors.size(); ++i) {
@@ -555,7 +592,8 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 
 				CapturyActor& actor = partialActors[i];
 				int j = cacp->startJoint;
-				if (isActor1) {
+				switch (version) {
+				case 1: {
 					CapturyJointPacket* end = (CapturyJointPacket*)&buf[size];
 					for (int k = 0; j < actor.numJoints && &cacp->joints[k] < end; ++j, ++k) {
 						strncpy(actor.joints[j].name, cacp->joints[k].name, sizeof(actor.joints[j].name)-1);
@@ -563,9 +601,11 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 						for (int x = 0; x < 3; ++x) {
 							actor.joints[j].offset[x] = cacp->joints[k].offset[x];
 							actor.joints[j].orientation[x] = cacp->joints[k].orientation[x];
+							actor.joints[j].scale[x] = 1.0f;
 						}
 					}
-				} else {
+					break; }
+				case 2: {
 					char* at = (char*)cacp->joints;
 					char* end = (char*)&buf[size];
 					for ( ; j < actor.numJoints && at < end; ++j) {
@@ -574,10 +614,27 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 						for (int x = 0; x < 3; ++x) {
 							actor.joints[j].offset[x] = jp->offset[x];
 							actor.joints[j].orientation[x] = jp->orientation[x];
+							actor.joints[j].scale[x] = 1.0f;
 						}
 						strncpy(actor.joints[j].name, jp->name, sizeof(actor.joints[j].name)-1);
 						at += sizeof(CapturyJointPacket2) + strlen(jp->name) + 1;
 					}
+					break; }
+				case 3: {
+					char* at = (char*)cacp->joints;
+					char* end = (char*)&buf[size];
+					for ( ; j < actor.numJoints && at < end; ++j) {
+						CapturyJointPacket3* jp = (CapturyJointPacket3*)at;
+						actor.joints[j].parent = jp->parent;
+						for (int x = 0; x < 3; ++x) {
+							actor.joints[j].offset[x] = jp->offset[x];
+							actor.joints[j].orientation[x] = jp->orientation[x];
+							actor.joints[j].scale[x] = jp->scale[x];
+						}
+						strncpy(actor.joints[j].name, jp->name, sizeof(actor.joints[j].name)-1);
+						at += sizeof(CapturyJointPacket3) + strlen(jp->name) + 1;
+					}
+					break; }
 				}
 				if (j == actor.numJoints) {
 					// printf("received fulll actor %d\n", actor.id);
@@ -792,7 +849,7 @@ static void receivedPose(CapturyPose* pose, int actorId, ActorData* aData, uint6
 
 			if (actorsById.count(actorId) == 0 || actorsById[actorId] == nullptr) {
 				CapturyRequestPacket packet;
-				packet.type = capturyActors;
+				packet.type = capturyActors2;
 				packet.size = sizeof(packet);
 
 				sendPacket(&packet, capturyActors);
@@ -1123,7 +1180,14 @@ static void* streamLoop(void* arg)
 
 			std::map<int, ActorData>::iterator it = actorData.find(cpp->actor);
 			ActorData& aData = it->second;
-			if (cpp->timestamp != aData.inProgressTimestamp) {
+			int inProgressIndex = -1;
+			for (int x = 0; x < 4; ++x) {
+				if (cpp->timestamp == aData.inProgress[inProgressIndex].timestamp) {
+					inProgressIndex = x;
+					break;
+				}
+			}
+			if (inProgressIndex == -1) {
 				lastErrorMessage = "pose continuation packet for wrong timestamp";
 				unlockMutex(&mutex);
 				continue;
@@ -1133,17 +1197,17 @@ static void* streamLoop(void* arg)
 
 			int numBytesToCopy = size - (int)((char*)cpc->values - (char*)cpc);
 			int totalBytes = actorsById[cpp->actor]->numJoints * sizeof(float) * 6;
-			if (aData.inProgressBytesDone + numBytesToCopy > totalBytes) {
+			if (aData.inProgress[inProgressIndex].bytesDone + numBytesToCopy > totalBytes) {
 				lastErrorMessage = "pose continuation too large";
 				unlockMutex(&mutex);
 				continue;
 			}
 
-			memcpy(((char*)aData.inProgressPose) + aData.inProgressBytesDone, cpc->values, numBytesToCopy);
-			aData.inProgressBytesDone += numBytesToCopy;
-			if (aData.inProgressBytesDone == totalBytes) {
-				memcpy(aData.currentPose.transforms, aData.inProgressPose, totalBytes);
-				receivedPose(&aData.currentPose, cpc->actor, &actorData[cpc->actor], aData.inProgressTimestamp);
+			memcpy(((char*)aData.inProgress[inProgressIndex].pose) + aData.inProgress[inProgressIndex].bytesDone, cpc->values, numBytesToCopy);
+			aData.inProgress[inProgressIndex].bytesDone += numBytesToCopy;
+			if (aData.inProgress[inProgressIndex].bytesDone == totalBytes) {
+				memcpy(aData.currentPose.transforms, aData.inProgress[inProgressIndex].pose, totalBytes);
+				receivedPose(&aData.currentPose, cpc->actor, &actorData[cpc->actor], aData.inProgress[inProgressIndex].timestamp);
 			}
 			unlockMutex(&mutex);
 			continue;
@@ -1213,16 +1277,27 @@ static void* streamLoop(void* arg)
 			it->second.flags = ((CapturyPosePacket2*)cpp)->flags;
 		}
 
+		// select oldest in-progress item
+		int inProgressIndex = 0;
+		uint64_t oldest = 0xFFFFFFFFFFFFFFFF;
+		for (int x = 0; x < 4; ++x) {
+			if (it->second.inProgress[x].timestamp < oldest) {
+				oldest = it->second.inProgress[x].timestamp;
+				inProgressIndex = x;
+			}
+		}
+
+		// either copy to currentPose or inProgress pose
 		int numBytesToCopy = sizeof(float) * numValues;
 		float* copyTo = it->second.currentPose.transforms[0].translation;
 		if (at + numBytesToCopy > size) {
 			unlockMutex(&mutex);
 			numBytesToCopy = size - at;
-			it->second.inProgressBytesDone = numBytesToCopy;
-			if (it->second.inProgressPose == NULL)
-				it->second.inProgressPose = new float[numValues];
-			copyTo = it->second.inProgressPose;
-			it->second.inProgressTimestamp = cpp->timestamp;
+			it->second.inProgress[inProgressIndex].bytesDone = numBytesToCopy;
+			if (it->second.inProgress[inProgressIndex].pose == NULL)
+				it->second.inProgress[inProgressIndex].pose = new float[numValues];
+			copyTo = it->second.inProgress[inProgressIndex].pose;
+			it->second.inProgress[inProgressIndex].timestamp = cpp->timestamp;
 			lockMutex(&mutex);
 		}
 
@@ -1405,7 +1480,7 @@ extern "C" int Captury_getActors(const CapturyActor** actrs)
 		return 0;
 
 	CapturyRequestPacket packet;
-	packet.type = capturyActors;
+	packet.type = capturyActors2;
 	packet.size = sizeof(packet);
 
 	if (!sendPacket(&packet, capturyActors))
@@ -1464,7 +1539,7 @@ extern "C" const CapturyActor* Captury_getActor(int id)
 	unlockMutex(&mutex);
 
 	CapturyRequestPacket packet;
-	packet.type = capturyActors;
+	packet.type = capturyActors2;
 	packet.size = sizeof(packet);
 
 	if (!sendPacket(&packet, capturyActors))

@@ -332,6 +332,7 @@ typedef enum { capturyActors = 1, capturyActor = 2,
 	       capturyPoseCont = 58,
 	       capturyActor2 = 59, capturyActorContinued2 = 60,
 	       capturyLatency = 61,
+	       capturyActors2 = 62, capturyActor3 = 63, capturyActorContinued3 = 64,
 	       capturyError = 0 } CapturyPacketTypes;
 
 // returns a string for nicer error messages
@@ -374,9 +375,19 @@ struct CapturyJointPacket2 {
 };
 
 // sent to client
+// part of CapturyActorPacket
+struct CapturyJointPacket3 {
+	int32_t		parent;
+	float		offset[3];
+	float		orientation[3];
+	float		scale[3];
+	char		name[];		// zero terminated joint name
+};
+
+// sent to client
 // as a reply to CapturyRequestPacket = capturyActors
 struct CapturyActorPacket {
-	int32_t		type;		// capturyActor or capturyActor2
+	int32_t		type;		// capturyActor or capturyActor2 or capturyActor3
 	int32_t		size;		// size of full message including type and size
 
 	char		name[32];
