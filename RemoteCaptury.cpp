@@ -480,7 +480,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 			if (expect == capturyActors) {
 				if (cap->numActors != 0) {
 					packetsMissing = cap->numActors;
-					expect = capturyActor2;
+					expect = capturyActor;
 				}
 			}
 			numRetries += packetsMissing;
@@ -1182,7 +1182,7 @@ static void* streamLoop(void* arg)
 			ActorData& aData = it->second;
 			int inProgressIndex = -1;
 			for (int x = 0; x < 4; ++x) {
-				if (cpp->timestamp == aData.inProgress[inProgressIndex].timestamp) {
+				if (cpp->timestamp == aData.inProgress[x].timestamp) {
 					inProgressIndex = x;
 					break;
 				}
