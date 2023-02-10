@@ -1496,9 +1496,18 @@ extern "C" int Captury_getActors(const CapturyActor** actrs)
 		}
 	}
 
-	actors.resize(newActors.size());
-	for (int i = 0; i < (int) actors.size(); ++i)
-		actors[i] = newActors[i];
+	// add those new actors that we haven't seen yet
+	for (int i = 0; i < (int) newActors.size(); ++i) {
+		bool foundIt = false;
+		for (int n = 0; n < actors.size(); ++n) {
+			if (actors[n].id == newActors[i].id) {
+				foundIt = true;
+				break;
+			}
+		}
+		if (!foundIt)
+			actors.push_back(newActors[i]);
+	}
 
 	newActors.clear();
 
