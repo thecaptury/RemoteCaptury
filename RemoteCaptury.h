@@ -56,6 +56,7 @@ CAPTURY_DLL_EXPORT int Captury_getCameras(const CapturyCamera** cameras);
 #define CAPTURY_STREAM_IMU_DATA		0x0020
 #define CAPTURY_STREAM_LATENCY_INFO	0x0040
 #define CAPTURY_STREAM_FOOT_CONTACT	0x0080
+#define CAPTURY_STREAM_COMPRESSED	0x0100
 
 // returns 1 if successful, 0 otherwise
 CAPTURY_DLL_EXPORT int Captury_startStreaming(int what);
@@ -333,6 +334,8 @@ typedef enum { capturyActors = 1, capturyActor = 2,
 	       capturyActor2 = 59, capturyActorContinued2 = 60,
 	       capturyLatency = 61,
 	       capturyActors2 = 62, capturyActor3 = 63, capturyActorContinued3 = 64,
+	       capturyCompressedPose = 65, capturyCompressedPose2 = 66,
+	       capturyCompressedPoseCont = 67,
 	       capturyError = 0 } CapturyPacketTypes;
 
 // returns a string for nicer error messages

@@ -367,6 +367,12 @@ const char* Captury_getHumanReadableMessageType(CapturyPacketTypes type)
 		return "<actor3>";
 	case capturyActorContinued3:
 		return "<actor3 continued>";
+	case capturyCompressedPose:
+		return "<compressed pose>";
+	case capturyCompressedPose2:
+		return "<compressed pose2>";
+	case capturyCompressedPoseCont:
+		return "<compressed pose continued>";
 	case capturyError:
 		return "<error>";
 	}
@@ -879,6 +885,43 @@ static void receivedPose(CapturyPose* pose, int actorId, ActorData* aData, uint6
 	}
 }
 
+static void decompressPose(const float* values, float* copyTo, uint8_t* v, int numJoints, CapturyActor* actor, bool first)
+{
+	for (int i = 0; i < numJoints; ++i) {
+		if (i == 0 && first) {
+			first = false;
+
+			int t = v[0] | (v[1] << 8) | (v[2] << 16);
+			copyTo[0] = t * 0.0625f;
+			v += 3;
+			t = v[0] | (v[1] << 8) | (v[2] << 16);
+			copyTo[1] = t * 0.0625f;
+			v += 3;
+			t = v[0] | (v[1] << 8) | (v[2] << 16);
+			copyTo[2] = t * 0.0625f;
+			v += 3;
+		} else {
+			int t = v[0] | (v[1] << 8);
+			copyTo[0] = t * 0.0625f + values[actor->joints[i].parent*6];
+			v += 2;
+			t = v[0] | (v[1] << 8);
+			copyTo[1] = t * 0.0625f + values[actor->joints[i].parent*6+1];
+			v += 2;
+			t = v[0] | (v[1] << 8);
+			copyTo[2] = t * 0.0625f + values[actor->joints[i].parent*6+2];
+			v += 2;
+		}
+
+		// decompress rotation
+		uint32_t rall = *(uint32_t*)v;
+		v += 4;
+		copyTo[3] = ((rall & 0x000003FF))       * (180.0f / 1023);
+		copyTo[4] = ((rall & 0x001FFC00) >> 10) * (360.0f / 2047) - 180.0f;
+		copyTo[5] = ((rall & 0xFFE00000) >> 21) * (360.0f / 2047) - 180.0f;
+		copyTo += 6;
+	}
+}
+
 #ifdef WIN32
 static DWORD WINAPI streamLoop(void* arg)
 #else
@@ -1168,7 +1211,7 @@ static void* streamLoop(void* arg)
 			unlockMutex(&mutex);
 			continue;
 		}
-		if (cpp->type == capturyPoseCont) {
+		if (cpp->type == capturyPoseCont || cpp->type == capturyCompressedPoseCont) {
 			lockMutex(&mutex);
 			if (actorsById.count(cpp->actor) == 0) {
 				char buff[400];
@@ -1203,7 +1246,10 @@ static void* streamLoop(void* arg)
 				continue;
 			}
 
-			memcpy(((char*)aData.inProgress[inProgressIndex].pose) + aData.inProgress[inProgressIndex].bytesDone, cpc->values, numBytesToCopy);
+			if (cpp->type == capturyPose || cpp->type == capturyPose2)
+				memcpy(((char*)aData.inProgress[inProgressIndex].pose) + aData.inProgress[inProgressIndex].bytesDone, cpc->values, numBytesToCopy);
+			else
+				decompressPose(aData.inProgress[inProgressIndex].pose, (float*)(((char*)aData.inProgress[inProgressIndex].pose) + aData.inProgress[inProgressIndex].bytesDone), (uint8_t*)cpc->values, numBytesToCopy / 10, actorsById[cpp->actor], false);
 			aData.inProgress[inProgressIndex].bytesDone += numBytesToCopy;
 			if (aData.inProgress[inProgressIndex].bytesDone == totalBytes) {
 				memcpy(aData.currentPose.transforms, aData.inProgress[inProgressIndex].pose, totalBytes);
@@ -1229,7 +1275,7 @@ static void* streamLoop(void* arg)
 			continue;
 		}
 
-		if (cpp->type != capturyPose && cpp->type != capturyPose2) {
+		if (cpp->type != capturyPose && cpp->type != capturyPose2 && cpp->type != capturyCompressedPose && cpp->type != capturyCompressedPose2) {
 			printf("stream socket received unrecognized packet %d\n", cpp->type);
 			continue;
 		}
@@ -1246,12 +1292,12 @@ static void* streamLoop(void* arg)
 		int numValues;
 		float* values;
 		int at;
-		if (cpp->type == capturyPose) {
+		if (cpp->type == capturyPose || cpp->type == capturyCompressedPose) {
 			// printf("actor %x: %d values: %g\n", cpp->actor, cpp->numValues, cpp->values[0]);
 			numValues = cpp->numValues;
 			values = cpp->values;
 			at = (int)((char*)(cpp->values) - (char*)cpp);
-		} else {
+		} else { // capturyPose2 || capturyCompressedPose2
 			numValues = ((CapturyPosePacket2*)cpp)->numValues;
 			values = ((CapturyPosePacket2*)cpp)->values;
 			at = (int)((char*)(((CapturyPosePacket2*)cpp)->values) - (char*)cpp);
@@ -1271,7 +1317,7 @@ static void* streamLoop(void* arg)
 			it->second.currentPose.transforms = new CapturyTransform[numValues/6];
 		}
 
-		if (cpp->type == capturyPose2) {
+		if (cpp->type == capturyPose2 || cpp->type == capturyCompressedPose2) {
 			it->second.scalingProgress = ((CapturyPosePacket2*)cpp)->scalingProgress;
 			it->second.trackingQuality = ((CapturyPosePacket2*)cpp)->trackingQuality;
 			it->second.flags = ((CapturyPosePacket2*)cpp)->flags;
@@ -1290,7 +1336,8 @@ static void* streamLoop(void* arg)
 		// either copy to currentPose or inProgress pose
 		int numBytesToCopy = sizeof(float) * numValues;
 		float* copyTo = it->second.currentPose.transforms[0].translation;
-		if (at + numBytesToCopy > size) {
+		if (((cpp->type == capturyPose || cpp->type == capturyPose2) && at + numBytesToCopy > size) ||
+		    ((cpp->type == capturyCompressedPose || cpp->type == capturyCompressedPose2) && at + (numValues/6-1)*10 + 13 > size)) {
 			unlockMutex(&mutex);
 			numBytesToCopy = size - at;
 			it->second.inProgress[inProgressIndex].bytesDone = numBytesToCopy;
@@ -1301,7 +1348,10 @@ static void* streamLoop(void* arg)
 			lockMutex(&mutex);
 		}
 
-		memcpy(copyTo, values, numBytesToCopy);
+		if (cpp->type == capturyPose || cpp->type == capturyPose2)
+			memcpy(copyTo, values, numBytesToCopy);
+		else // compressed
+			decompressPose(copyTo, copyTo, (uint8_t*)values, numValues / 6, actorsById[cpp->actor], true);
 
 		if (numBytesToCopy == numValues * (int)sizeof(float))
 			receivedPose(&it->second.currentPose, cpp->actor, &it->second, cpp->timestamp);
@@ -1487,15 +1537,6 @@ extern "C" int Captury_getActors(const CapturyActor** actrs)
 		return 0;
 
 	lockMutex(&mutex);
-	// clear list - we are getting a new one now.
-	// stupid C interface requires us to do the cleanup manually
-	for (int i = 0; i < (int) actors.size(); ++i) {
-		if (actors[i].joints != nullptr) {
-			delete[] actors[i].joints;
-			actors[i].joints = nullptr;
-		}
-	}
-
 	// add those new actors that we haven't seen yet
 	for (int i = 0; i < (int) newActors.size(); ++i) {
 		bool foundIt = false;
