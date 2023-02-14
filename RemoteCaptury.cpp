@@ -891,23 +891,35 @@ static void decompressPose(const float* values, float* copyTo, uint8_t* v, int n
 		if (i == 0 && first) {
 			first = false;
 
-			int t = v[0] | (v[1] << 8) | (v[2] << 16);
+			int32_t t = v[0] | (v[1] << 8) | (v[2] << 16);
+			if ((t & 0x800000) != 0)
+				t |= 0xFF000000;
 			copyTo[0] = t * 0.0625f;
 			v += 3;
 			t = v[0] | (v[1] << 8) | (v[2] << 16);
+			if ((t & 0x800000) != 0)
+				t |= 0xFF000000;
 			copyTo[1] = t * 0.0625f;
 			v += 3;
 			t = v[0] | (v[1] << 8) | (v[2] << 16);
+			if ((t & 0x800000) != 0)
+				t |= 0xFF000000;
 			copyTo[2] = t * 0.0625f;
 			v += 3;
 		} else {
-			int t = v[0] | (v[1] << 8);
+			int32_t t = v[0] | (v[1] << 8);
+			if ((t & 0x8000) != 0)
+				t |= 0xFFFF0000;
 			copyTo[0] = t * 0.0625f + values[actor->joints[i].parent*6];
 			v += 2;
 			t = v[0] | (v[1] << 8);
+			if ((t & 0x8000) != 0)
+				t |= 0xFFFF0000;
 			copyTo[1] = t * 0.0625f + values[actor->joints[i].parent*6+1];
 			v += 2;
 			t = v[0] | (v[1] << 8);
+			if ((t & 0x8000) != 0)
+				t |= 0xFFFF0000;
 			copyTo[2] = t * 0.0625f + values[actor->joints[i].parent*6+2];
 			v += 2;
 		}
