@@ -1258,7 +1258,7 @@ static void* streamLoop(void* arg)
 				continue;
 			}
 
-			if (cpp->type == capturyPose || cpp->type == capturyPose2)
+			if (cpp->type == capturyPoseCont)
 				memcpy(((char*)aData.inProgress[inProgressIndex].pose) + aData.inProgress[inProgressIndex].bytesDone, cpc->values, numBytesToCopy);
 			else
 				decompressPose(aData.inProgress[inProgressIndex].pose, (float*)(((char*)aData.inProgress[inProgressIndex].pose) + aData.inProgress[inProgressIndex].bytesDone), (uint8_t*)cpc->values, numBytesToCopy / 10, actorsById[cpp->actor], false);
