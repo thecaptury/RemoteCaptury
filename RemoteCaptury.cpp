@@ -927,9 +927,9 @@ static void decompressPose(const float* values, float* copyTo, uint8_t* v, int n
 		// decompress rotation
 		uint32_t rall = *(uint32_t*)v;
 		v += 4;
-		copyTo[3] = ((rall & 0x000003FF))       * (180.0f / 1023);
-		copyTo[4] = ((rall & 0x001FFC00) >> 10) * (360.0f / 2047) - 180.0f;
-		copyTo[5] = ((rall & 0xFFE00000) >> 21) * (360.0f / 2047) - 180.0f;
+		copyTo[3] = ((rall & 0x000007FF))       * (360.0f / 2047) - 180.0f;
+		copyTo[4] = ((rall & 0x003FF800) >> 11) * (360.0f / 2047) - 180.0f;
+		copyTo[5] = ((rall & 0xFFC00000) >> 22) * (180.0f / 1023);
 		copyTo += 6;
 	}
 }
