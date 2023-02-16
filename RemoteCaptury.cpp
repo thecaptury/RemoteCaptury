@@ -210,11 +210,32 @@ static sockaddr_in	remoteAddress; // address of server
 static uint16_t		streamSocketPort = 0;
 
 static uint64_t		pingTime;
+static int32_t		nextTimeId = 213;
 static int64_t		timeOffset = 0; // time offset between clock on Captury Live server and local machine
 
 static int					backgroundQuality = -1;
 static CapturyBackgroundFinishedCallback	backgroundFinishedCallback = NULL;
 static void*					backgroundFinishedCallbackUserData = NULL;
+
+struct Sync {
+	double localOffset;
+	double offset;
+	double factor;
+
+	Sync(double lo, double o, double f) : localOffset(lo), offset(o), factor(f) {}
+
+	uint64_t getRemoteTime(uint64_t localT)	{ return (localT - localOffset) * factor + offset; }
+};
+
+struct SyncSample {
+	int64_t		localT;
+	int64_t		remoteT;
+	uint32_t	pingPongT;
+
+	SyncSample(uint64_t l, uint64_t r, uint32_t pp) : localT(l), remoteT(r), pingPongT(pp) {}
+};
+
+std::vector<SyncSample> syncSamples;
 
 #ifdef WIN32
 static inline void lockMutex(CRITICAL_SECTION* critsec)
@@ -373,6 +394,10 @@ const char* Captury_getHumanReadableMessageType(CapturyPacketTypes type)
 		return "<compressed pose2>";
 	case capturyCompressedPoseCont:
 		return "<compressed pose continued>";
+	case capturyGetTime2:
+		return "<get time2>";
+	case capturyTime2:
+		return "<time2>";
 	case capturyError:
 		return "<error>";
 	}
@@ -425,6 +450,73 @@ static uint64_t getTime()
 #endif
 }
 
+static void computeSync(Sync& s)
+{
+	double meanLocalT = 0;
+	double meanRemoteT = 0;
+	double offset = 0;
+	double scale = 1.0 / syncSamples.size();
+
+	for (SyncSample& ss : syncSamples) {
+		meanLocalT += ss.localT * scale;
+		meanRemoteT += ss.remoteT * scale;
+		offset += (ss.remoteT - ss.localT) * scale;
+	}
+
+	if (syncSamples.size() < 10 || (syncSamples.back().localT - syncSamples.front().localT) < 1000000) { // not enough samples
+		s.localOffset = 0.0;
+		s.offset = offset;
+		s.factor = 1.0;
+		printf("sync based on %d samples: offset %g\n", (int)syncSamples.size(), s.offset);
+	} else {
+		s.localOffset = meanLocalT;
+		s.offset = meanRemoteT;
+		s.factor = 1.0;
+		for (SyncSample& ss : syncSamples) {
+			double f = (ss.remoteT - meanRemoteT) / (ss.localT - meanLocalT);
+			s.factor *= f;
+		}
+		s.factor *= std::pow(s.factor, scale);
+		printf("sync based on %d samples: offset %g, factor %g (mlt %g, mrt %g)\n", (int)syncSamples.size(), s.offset, s.factor, meanLocalT, meanRemoteT);
+	}
+}
+
+static Sync oldSync(0.0, 0.0, 1.0), currentSync(0.0, 0.0, 1.0);
+static uint64_t transitionStartLocalT = 0;
+static uint64_t transitionEndLocalT = 0;
+static void updateSync(uint64_t localT)
+{
+	constexpr uint64_t defaultTransitionTime = 100000; // 0.1 second
+	oldSync = currentSync;
+	computeSync(currentSync);
+
+	transitionStartLocalT = localT;
+	transitionEndLocalT = localT;
+	double transitionStartRemoteT = oldSync.getRemoteTime(localT);
+	oldSync.localOffset = localT;
+	oldSync.offset = transitionStartRemoteT;
+	oldSync.factor = currentSync.factor;
+
+	printf("sync: old - new estimate %g (factor %g)\n", transitionStartRemoteT - currentSync.getRemoteTime(localT), currentSync.factor);
+
+	// transitionFactor = std::abs(transitionStartRemoteT - remoteT) / defaultTransitionTime;
+	// TODO limit skew speed
+	transitionEndLocalT = transitionStartLocalT + defaultTransitionTime;
+}
+
+extern "C" uint64_t Captury_getTime()
+{
+	uint64_t localT = getTime();
+	if (localT >= transitionEndLocalT)
+		return currentSync.getRemoteTime(localT);
+
+	uint64_t oldEstimate = oldSync.getRemoteTime(localT);
+	uint64_t newEstimate = currentSync.getRemoteTime(localT);
+	double at = (localT - transitionStartLocalT) / (transitionEndLocalT - transitionStartLocalT);
+	printf("sync: local %ld old %ld new %ld -> %ld\n", localT, oldEstimate, newEstimate, (uint64_t)(oldEstimate * (1.0 - at) + newEstimate * at));
+	return oldEstimate * (1.0 - at) + newEstimate * at;
+}
+
 // waits for at most 30ms before it fails
 // returns false if the expected packet is not received
 static bool receive(SOCKET sok, CapturyPacketTypes expect)
@@ -442,7 +534,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 
 		struct timeval tv;
 		tv.tv_sec = 0;
-		tv.tv_usec = 10000; // 10ms should be enough
+		tv.tv_usec = 20000; // 20ms should be enough
 		int ret = select((int)(sok+1), &reader, NULL, NULL, &tv);
 		if (ret == -1) { // error
 			printf("error waiting for socket waiting for packet type %s\n", Captury_getHumanReadableMessageType(expect));
@@ -691,6 +783,14 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 			currentSession = dss->session;
 			currentShot = dss->shot;
 			break; }
+		case capturyTime2: {
+			CapturyTimePacket2* tp = (CapturyTimePacket2*)&buf[0];
+			if (tp->timeId != nextTimeId) {
+				printf("time id doesn't match, expected %d got %d", nextTimeId, tp->timeId);
+				p->type = capturyError;
+				break;
+			}
+			} // fall through
 		case capturyTime: {
 			CapturyTimePacket* tp = (CapturyTimePacket*)&buf[0];
 			int64_t zero = 0;
@@ -699,8 +799,12 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 			// we assume that the network transfer time is symmetric
 			// so the timestamp given in the packet was captured at (pingTime + pongTime) / 2
 			uint64_t t = (pongTime - pingTime) / 2 + pingTime;
-			int64_t delta = tp->timestamp - t;
-			atomicStore(&timeOffset, delta);
+			syncSamples.emplace_back(t, tp->timestamp, pongTime - pingTime);
+			if (syncSamples.size() > 50)
+				syncSamples.erase(syncSamples.begin());
+			updateSync(t);
+			// int64_t delta = tp->timestamp - t;
+			// atomicStore(&timeOffset, delta);
 			printf("local: %" PRIu64 " remote: %" PRIu64 " => offset %" PRId64 ", roundtrip %" PRId64 "\n", t, tp->timestamp, tp->timestamp - t, pongTime - pingTime);
 			break; }
 		case capturyCustom: {
@@ -789,10 +893,10 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 	return (packetsMissing == 0);
 }
 
-static bool sendPacket(CapturyRequestPacket* packet, CapturyPacketTypes expectedReplyType)
+static bool sendPacket(CapturyRequestPacket* packet, CapturyPacketTypes expectedReplyType, int numRetries = 3)
 {
 	bool received = false;
-	for (int i = 0; i < 3; ++i) {
+	for (int i = 0; i < numRetries; ++i) {
 		if (send(sock, (const char*)packet, packet->size, 0) != packet->size)
 			continue;
 
@@ -2064,23 +2168,18 @@ extern "C" int Captury_stopRecording()
 
 extern "C" uint64_t Captury_synchronizeTime()
 {
-	CapturyRequestPacket packet;
-	packet.type = capturyGetTime;
+	CapturyTimePacket2 packet;
+	packet.type = capturyGetTime2;
 	packet.size = sizeof(packet);
+	++nextTimeId;
+	packet.timeId = nextTimeId;
 
 	pingTime = getTime();
 
-	if (!sendPacket(&packet, capturyTime))
+	if (!sendPacket((CapturyRequestPacket*)&packet, capturyTime2, 1))
 		return 0;
 
 	return Captury_getTime();
-}
-
-extern "C" uint64_t Captury_getTime()
-{
-	int64_t to;
-	atomicLoad(&timeOffset, &to);
-	return getTime() + to;
 }
 
 extern "C" int64_t Captury_getTimeOffset()

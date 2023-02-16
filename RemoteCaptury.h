@@ -336,6 +336,7 @@ typedef enum { capturyActors = 1, capturyActor = 2,
 	       capturyActors2 = 62, capturyActor3 = 63, capturyActorContinued3 = 64,
 	       capturyCompressedPose = 65, capturyCompressedPose2 = 66,
 	       capturyCompressedPoseCont = 67,
+	       capturyGetTime2 = 68, capturyTime2 = 69,
 	       capturyError = 0 } CapturyPacketTypes;
 
 // returns a string for nicer error messages
@@ -537,6 +538,17 @@ struct CapturyTimePacket {
 	int32_t		size;
 
 	uint64_t	timestamp;
+};
+
+// sent to client
+// as a reply to capturyGetTime2
+struct CapturyTimePacket2 {
+	int32_t		type;	// capturyGetTime2, capturyTime2
+	int32_t		size;
+
+	uint64_t	timestamp;
+
+	int32_t		timeId; // set by remote client and repeated by server
 };
 
 // sent to server
