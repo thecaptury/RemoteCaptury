@@ -513,7 +513,7 @@ extern "C" uint64_t Captury_getTime()
 	uint64_t oldEstimate = oldSync.getRemoteTime(localT);
 	uint64_t newEstimate = currentSync.getRemoteTime(localT);
 	double at = (localT - transitionStartLocalT) / (transitionEndLocalT - transitionStartLocalT);
-	printf("sync: local %ld old %ld new %ld -> %ld\n", localT, oldEstimate, newEstimate, (uint64_t)(oldEstimate * (1.0 - at) + newEstimate * at));
+	printf("sync: local %" PRIu64 " old %" PRIu64 " new %" PRIu64 " -> %" PRIu64 "\n", localT, oldEstimate, newEstimate, (uint64_t)(oldEstimate * (1.0 - at) + newEstimate * at));
 	return oldEstimate * (1.0 - at) + newEstimate * at;
 }
 
@@ -786,7 +786,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 		case capturyTime2: {
 			CapturyTimePacket2* tp = (CapturyTimePacket2*)&buf[0];
 			if (tp->timeId != nextTimeId) {
-				printf("time id doesn't match, expected %d got %d", nextTimeId, tp->timeId);
+				printf("time id doesn't match, expected %d got %d\n", nextTimeId, tp->timeId);
 				p->type = capturyError;
 				break;
 			}
