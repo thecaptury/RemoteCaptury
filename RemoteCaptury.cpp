@@ -556,7 +556,7 @@ static uint64_t getRemoteTime(uint64_t localT)
 	uint64_t newEstimate = currentSync.getRemoteTime(localT);
 	double at = (localT - transitionStartLocalT) / (transitionEndLocalT - transitionStartLocalT);
 	unlockMutex(&syncMutex);
-	// log("sync: local %ld old %ld new %ld -> %ld\n", localT, oldEstimate, newEstimate, (uint64_t)(oldEstimate * (1.0 - at) + newEstimate * at));
+	// log("sync: local %" PRIu64 " old %" PRIu64 " new %" PRIu64 " -> %" PRIu64 "\n", localT, oldEstimate, newEstimate, (uint64_t)(oldEstimate * (1.0 - at) + newEstimate * at));
 	return oldEstimate * (1.0 - at) + newEstimate * at;
 }
 
