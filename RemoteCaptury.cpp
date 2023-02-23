@@ -44,6 +44,9 @@
 #include <errno.h>
 #endif
 
+#include <list>
+#include <stdarg.h>
+
 typedef uint32_t uint;
 
 #if defined WIN32 || defined _WIN32 && !defined __CYGWIN__
@@ -74,13 +77,16 @@ typedef uint32_t uint;
 
 #ifdef WIN32
 static HANDLE		thread;
+static HANDLE		syncThread;
 static CRITICAL_SECTION	mutex;
 static CRITICAL_SECTION	partialActorMutex;
+static CRITICAL_SECTION	syncMutex;
 #define socklen_t	int
 #else
 #define SOCKET		int
 #define closesocket	close
 static pthread_t	thread;
+static pthread_t	syncThread;
 struct CAPABILITY("mutex") MutexStruct {
 	pthread_mutex_t	m;
 	MutexStruct()			{ pthread_mutex_init(&m, nullptr); }
@@ -89,6 +95,7 @@ struct CAPABILITY("mutex") MutexStruct {
 };
 static MutexStruct mutex;
 static MutexStruct partialActorMutex;
+static MutexStruct syncMutex;
 // static pthread_mutex_t	mutex = PTHREAD_MUTEX_INITIALIZER;
 #endif
 
@@ -113,7 +120,7 @@ static uint64_t mostRecentPoseReceivedTimestamp; // timestamp of that pose
 // actor id -> pointer to actor
 static std::map<int, CapturyActor*> actorsById GUARDED_BY(mutex);
 
-const char* CapturyActorStatusString[] = {"scaling", "tracking", "stopped", "deleted"};
+const char* CapturyActorStatusString[] = {"scaling", "tracking", "stopped", "deleted", "unknown"};
 
 struct ActorData {
 	// actor id -> scaling progress (0 to 100)
@@ -211,11 +218,28 @@ static uint16_t		streamSocketPort = 0;
 
 static uint64_t		pingTime;
 static int32_t		nextTimeId = 213;
-static int64_t		timeOffset = 0; // time offset between clock on Captury Live server and local machine
 
 static int					backgroundQuality = -1;
 static CapturyBackgroundFinishedCallback	backgroundFinishedCallback = NULL;
 static void*					backgroundFinishedCallbackUserData = NULL;
+
+static std::list<std::string>		logs;
+
+static void log(const char *format, ...) __attribute__((format(printf,1,2)));
+static void log(const char *format, ...)
+{
+	char buffer[500];
+	va_list args;
+	va_start(args, format);
+	vsnprintf(buffer, 500, format, args);
+	va_end(args);
+
+	logs.emplace_back(buffer);
+	printf("%s", buffer);
+
+	if (logs.size() > 100000)
+		logs.pop_front();
+}
 
 struct Sync {
 	double localOffset;
@@ -256,6 +280,14 @@ static inline void unlockMutex(MutexStruct* mtx) RELEASE(mtx)
 	mtx->unlock();
 }
 #endif
+
+const char* Captury_getNextLogMessage()
+{
+	const char* str = strdup(logs.front().c_str());
+	logs.pop_front();
+
+	return str;
+}
 
 const char* Captury_getHumanReadableMessageType(CapturyPacketTypes type)
 {
@@ -467,7 +499,7 @@ static void computeSync(Sync& s)
 		s.localOffset = 0.0;
 		s.offset = offset;
 		s.factor = 1.0;
-		printf("sync based on %d samples: offset %g\n", (int)syncSamples.size(), s.offset);
+		log("sync based on %d samples: offset %g\n", (int)syncSamples.size(), s.offset);
 	} else {
 		s.localOffset = meanLocalT;
 		s.offset = meanRemoteT;
@@ -477,44 +509,60 @@ static void computeSync(Sync& s)
 			s.factor *= f;
 		}
 		s.factor *= std::pow(s.factor, scale);
-		printf("sync based on %d samples: offset %g, factor %g (mlt %g, mrt %g)\n", (int)syncSamples.size(), s.offset, s.factor, meanLocalT, meanRemoteT);
+		log("sync based on %d samples: offset %g, factor %g (mlt %g, mrt %g)\n", (int)syncSamples.size(), s.offset, s.factor, meanLocalT, meanRemoteT);
 	}
 }
 
-static Sync oldSync(0.0, 0.0, 1.0), currentSync(0.0, 0.0, 1.0);
-static uint64_t transitionStartLocalT = 0;
-static uint64_t transitionEndLocalT = 0;
+static Sync oldSync GUARDED_BY(syncMutex) = Sync(0.0, 0.0, 1.0);
+static Sync currentSync GUARDED_BY(syncMutex) = Sync(0.0, 0.0, 1.0);
+static uint64_t transitionStartLocalT GUARDED_BY(syncMutex) = 0;
+static uint64_t transitionEndLocalT GUARDED_BY(syncMutex) = 0;
 static void updateSync(uint64_t localT)
 {
 	constexpr uint64_t defaultTransitionTime = 100000; // 0.1 second
-	oldSync = currentSync;
-	computeSync(currentSync);
+	Sync tempSync(0.0, 0.0, 1.0);
+	computeSync(tempSync);
 
+	lockMutex(&syncMutex);
 	transitionStartLocalT = localT;
-	transitionEndLocalT = localT;
-	double transitionStartRemoteT = oldSync.getRemoteTime(localT);
-	oldSync.localOffset = localT;
-	oldSync.offset = transitionStartRemoteT;
-	oldSync.factor = currentSync.factor;
-
-	printf("sync: old - new estimate %g (factor %g)\n", transitionStartRemoteT - currentSync.getRemoteTime(localT), currentSync.factor);
 
 	// transitionFactor = std::abs(transitionStartRemoteT - remoteT) / defaultTransitionTime;
 	// TODO limit skew speed
 	transitionEndLocalT = transitionStartLocalT + defaultTransitionTime;
+	double transitionStartRemoteT = currentSync.getRemoteTime(localT);
+
+	currentSync = tempSync;
+	oldSync.localOffset = localT;
+	oldSync.offset = transitionStartRemoteT;
+	oldSync.factor = currentSync.factor;
+
+	double delta = transitionStartRemoteT - currentSync.getRemoteTime(localT);
+	double factor = currentSync.factor;
+	unlockMutex(&syncMutex);
+
+	log("sync: old - new estimate %g (factor %g)\n", delta, factor);
 }
 
-extern "C" uint64_t Captury_getTime()
+static uint64_t getRemoteTime(uint64_t localT)
 {
-	uint64_t localT = getTime();
-	if (localT >= transitionEndLocalT)
-		return currentSync.getRemoteTime(localT);
+	lockMutex(&syncMutex);
+	if (localT >= transitionEndLocalT) {
+		uint64_t t = currentSync.getRemoteTime(localT);
+		unlockMutex(&syncMutex);
+		return t;
+	}
 
 	uint64_t oldEstimate = oldSync.getRemoteTime(localT);
 	uint64_t newEstimate = currentSync.getRemoteTime(localT);
 	double at = (localT - transitionStartLocalT) / (transitionEndLocalT - transitionStartLocalT);
-	printf("sync: local %ld old %ld new %ld -> %ld\n", localT, oldEstimate, newEstimate, (uint64_t)(oldEstimate * (1.0 - at) + newEstimate * at));
+	unlockMutex(&syncMutex);
+	// log("sync: local %ld old %ld new %ld -> %ld\n", localT, oldEstimate, newEstimate, (uint64_t)(oldEstimate * (1.0 - at) + newEstimate * at));
 	return oldEstimate * (1.0 - at) + newEstimate * at;
+}
+
+extern "C" uint64_t Captury_getTime()
+{
+	return getRemoteTime(getTime());
 }
 
 // waits for at most 30ms before it fails
@@ -537,11 +585,11 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 		tv.tv_usec = 20000; // 20ms should be enough
 		int ret = select((int)(sok+1), &reader, NULL, NULL, &tv);
 		if (ret == -1) { // error
-			printf("error waiting for socket waiting for packet type %s\n", Captury_getHumanReadableMessageType(expect));
+			log("error waiting for socket waiting for packet type %s\n", Captury_getHumanReadableMessageType(expect));
 			return 0;
 		}
 		if (ret == 0) {
-			printf("timeout waiting for packet type %s\n", Captury_getHumanReadableMessageType(expect));
+			log("timeout waiting for packet type %s\n", Captury_getHumanReadableMessageType(expect));
 			continue;
 		}
 
@@ -551,30 +599,30 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
  			getsockname(sok, (sockaddr*) &thisEnd, &len);
 
 // #ifdef WIN32
-// 			printf("Stream receiving on %d.%d.%d.%d:%d\n", thisEnd.sin_addr.S_un.S_un_b.s_b1, thisEnd.sin_addr.S_un.S_un_b.s_b2, thisEnd.sin_addr.S_un.S_un_b.s_b3, thisEnd.sin_addr.S_un.S_un_b.s_b4, ntohs(thisEnd.sin_port));
+// 			log("Stream receiving on %d.%d.%d.%d:%d\n", thisEnd.sin_addr.S_un.S_un_b.s_b1, thisEnd.sin_addr.S_un.S_un_b.s_b2, thisEnd.sin_addr.S_un.S_un_b.s_b3, thisEnd.sin_addr.S_un.S_un_b.s_b4, ntohs(thisEnd.sin_port));
 // #else
 //  			char buf[100];
-// 			printf("stream receiving on %s:%d\n", inet_ntop(AF_INET, &thisEnd.sin_addr, buf, 100), ntohs(thisEnd.sin_port));
+// 			log("stream receiving on %s:%d\n", inet_ntop(AF_INET, &thisEnd.sin_addr, buf, 100), ntohs(thisEnd.sin_port));
 // #endif
 		}
 
 		// first peek to find out which packet type this is
 		int size = recv(sok, buf, sizeof(buf), 0);
 		if (size == 0) { // the other end shut down the socket...
-			printf("socket shut down by other end\n");
+			log("socket shut down by other end\n");
 			return 0;
 		}
 		if (size == -1) { // error
-			printf("socket error\n");
+			log("socket error\n");
 			return 0;
 		}
 
-//		printf("received packet size %d type %d (expected %d)\n", size, p->type, expect);
+//		log("received packet size %d type %d (expected %d)\n", size, p->type, expect);
 
 		switch (p->type) {
 		case capturyActors: {
 			CapturyActorsPacket* cap = (CapturyActorsPacket*)&buf[0];
-			printf("expecting %d actor packets\n", cap->numActors);
+			log("expecting %d actor packets\n", cap->numActors);
 			if (expect == capturyActors) {
 				if (cap->numActors != 0) {
 					packetsMissing = cap->numActors;
@@ -665,10 +713,10 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 				expect = (version == 1) ? capturyActorContinued : (version == 2) ? capturyActorContinued2 : capturyActorContinued3;
 				numRetries += 1;
 			}
-			//printf("received actor %d (%d/%d), missing %d\n", actor.id, numTransmittedJoints, actor.numJoints, packetsMissing);
+			//log("received actor %d (%d/%d), missing %d\n", actor.id, numTransmittedJoints, actor.numJoints, packetsMissing);
 			p->type = capturyActor;
 			if (numTransmittedJoints == actor.numJoints) {
-				//printf("received fulll actor %d\n", actor.id);
+				//log("received fulll actor %d\n", actor.id);
 				lockMutex(&mutex);
 				newActors.push_back(actor);
 				unlockMutex(&mutex);
@@ -735,7 +783,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 					break; }
 				}
 				if (j == actor.numJoints) {
-					// printf("received fulll actor %d\n", actor.id);
+					// log("received fulll actor %d\n", actor.id);
 					lockMutex(&mutex);
 					newActors.push_back(actor);
 					unlockMutex(&mutex);
@@ -745,7 +793,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 					numRetries += 1;
 					packetsMissing += 1;
 				}
-				// printf("received actor cont %d (%d/%d), missing %d\n", actor.id, j, actor.numJoints, packetsMissing);
+				// log("received actor cont %d (%d/%d), missing %d\n", actor.id, j, actor.numJoints, packetsMissing);
 				break;
 			}
 			unlockMutex(&partialActorMutex);
@@ -775,7 +823,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 			break; }
 		case capturyPose:
 		case capturyPose2:
-			printf("received pose on control socket\n");
+			log("received pose on control socket\n");
 			break;
 		case capturyDaySessionShot: {
 			CapturyDaySessionShotPacket* dss = (CapturyDaySessionShotPacket*)&buf[0];
@@ -786,15 +834,13 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 		case capturyTime2: {
 			CapturyTimePacket2* tp = (CapturyTimePacket2*)&buf[0];
 			if (tp->timeId != nextTimeId) {
-				printf("time id doesn't match, expected %d got %d", nextTimeId, tp->timeId);
+				log("time id doesn't match, expected %d got %d", nextTimeId, tp->timeId);
 				p->type = capturyError;
 				break;
 			}
 			} // fall through
 		case capturyTime: {
 			CapturyTimePacket* tp = (CapturyTimePacket*)&buf[0];
-			int64_t zero = 0;
-			atomicStore(&timeOffset, zero);
 			uint64_t pongTime = getTime();
 			// we assume that the network transfer time is symmetric
 			// so the timestamp given in the packet was captured at (pingTime + pongTime) / 2
@@ -803,9 +849,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 			if (syncSamples.size() > 50)
 				syncSamples.erase(syncSamples.begin());
 			updateSync(t);
-			// int64_t delta = tp->timestamp - t;
-			// atomicStore(&timeOffset, delta);
-			printf("local: %" PRIu64 " remote: %" PRIu64 " => offset %" PRId64 ", roundtrip %" PRId64 "\n", t, tp->timestamp, tp->timestamp - t, pongTime - pingTime);
+			log("local: %" PRIu64 " remote: %" PRIu64 " => offset %" PRId64 ", roundtrip %" PRId64 "\n", t, tp->timestamp, tp->timestamp - t, pongTime - pingTime);
 			break; }
 		case capturyCustom: {
 			CapturyCustomPacket* ccp = (CapturyCustomPacket*)&buf[0];
@@ -828,7 +872,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 			actorData[tp->actor].currentTextures.width = tp->width;
 			actorData[tp->actor].currentTextures.height = tp->height;
 			actorData[tp->actor].currentTextures.timestamp = 0;
-//			printf("got image header %dx%d for actor %x\n", currentTextures[tp->actor].width, currentTextures[tp->actor].height, tp->actor);
+//			log("got image header %dx%d for actor %x\n", currentTextures[tp->actor].width, currentTextures[tp->actor].height, tp->actor);
 			actorData[tp->actor].currentTextures.data = (unsigned char*)malloc(tp->width*tp->height*3);
 			actorData[tp->actor].receivedPackets = std::vector<int>( ((tp->width*tp->height*3 + tp->dataPacketSize-16-1) / (tp->dataPacketSize-16)), 0);
 			unlockMutex(&mutex);
@@ -842,7 +886,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 			packet.size = sizeof(packet);
 			packet.actor = tp->actor;
 			packet.port = streamSocketPort;
-//			printf("requesting image to port %d\n", ntohs(packet.port));
+//			log("requesting image to port %d\n", ntohs(packet.port));
 
 			if (send(sock, (const char*)&packet, packet.size, 0) != packet.size)
 				break;
@@ -919,11 +963,10 @@ static void receivedPose(CapturyPose* pose, int actorId, ActorData* aData, uint6
 	pose->timestamp = timestamp;
 
 	uint64_t now = getTime();
+	log("received pose %ld at %ld, diff %ld\n", pose->timestamp, now, now - aData->lastPoseTimestamp);
 	aData->lastPoseTimestamp = now;
 
-	int64_t to;
-	atomicLoad(&timeOffset, &to);
-	mostRecentPoseReceivedTime = now + to;
+	mostRecentPoseReceivedTime = getRemoteTime(now);
 	mostRecentPoseReceivedTimestamp = timestamp;
 
 	if (aData->status != ACTOR_SCALING && aData->status != ACTOR_TRACKING) {
@@ -1050,21 +1093,21 @@ static void* streamLoop(void* arg)
 
 	SOCKET streamSock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 	if (streamSock == -1) {
-		printf("failed to create stream socket\n");
+		log("failed to create stream socket\n");
 		delete packet;
 		return 0;
 	}
 
 	if (bind(streamSock, (sockaddr*) &localStreamAddress, sizeof(localStreamAddress)) != 0) {
 		closesocket(streamSock);
-		printf("failed to bind stream socket\n");
+		log("failed to bind stream socket\n");
 		delete packet;
 		return 0;
 	}
 
 	if (connect(streamSock, (sockaddr*) &remoteAddress, sizeof(remoteAddress)) != 0) {
 		closesocket(streamSock);
-		printf("failed to connect stream socket\n");
+		log("failed to connect stream socket\n");
 		delete packet;
 		return 0;
 	}
@@ -1082,14 +1125,14 @@ static void* streamLoop(void* arg)
 		streamSocketPort = thisEnd.sin_port;
 
 		#ifdef WIN32
-		 	printf("Stream receiving on %d.%d.%d.%d:%d\n", thisEnd.sin_addr.S_un.S_un_b.s_b1, thisEnd.sin_addr.S_un.S_un_b.s_b2, thisEnd.sin_addr.S_un.S_un_b.s_b3, thisEnd.sin_addr.S_un.S_un_b.s_b4, ntohs(thisEnd.sin_port));
+		 	log("Stream receiving on %d.%d.%d.%d:%d\n", thisEnd.sin_addr.S_un.S_un_b.s_b1, thisEnd.sin_addr.S_un.S_un_b.s_b2, thisEnd.sin_addr.S_un.S_un_b.s_b3, thisEnd.sin_addr.S_un.S_un_b.s_b4, ntohs(thisEnd.sin_port));
 		#else
 			char buf[100];
-			printf("stream receiving on %s:%d\n", inet_ntop(AF_INET, &thisEnd.sin_addr, buf, 100), ntohs(thisEnd.sin_port));
+			log("stream receiving on %s:%d\n", inet_ntop(AF_INET, &thisEnd.sin_addr, buf, 100), ntohs(thisEnd.sin_port));
 		#endif
 	}
 
-	//	printf("stream packet has size %d\n", packet->size);
+	//	log("stream packet has size %d\n", packet->size);
 
 	// resend request 3 times
 	bool received = false;
@@ -1127,24 +1170,24 @@ static void* streamLoop(void* arg)
 		tv.tv_usec = 500000; // 0.5s = 2Hz
 		int ret = select((int)(streamSock+1), &reader, NULL, NULL, &tv);
 		if (ret == -1) { // error
+			log("error waiting for stream socket\n");
 			lastErrorMessage = "Error waiting for stream socket";
 			return 0;
 		}
 		if (ret == 0) {
+			log("stream timed out\n");
 			lastErrorMessage = "Stream timed out";
 			continue;
 		}
 
-		int64_t to;
-		atomicLoad(&timeOffset, &to);
-		dataAvailableTime = getTime() + to;
+		dataAvailableTime = getRemoteTime(getTime());
 
 		char buf[10000];
 		CapturyPosePacket* cpp = (CapturyPosePacket*)&buf[0];
 
 		// first peek to find out which packet type this is
 		int size = recv(streamSock, buf, sizeof(buf), 0);
-//		printf("received stream packet size %d (%d %d)\n", (int) size, cpp->type, cpp->size);
+//		log("received stream packet size %d (%d %d)\n", (int) size, cpp->type, cpp->size);
 		if (size == 0) { // the other end shut down the socket...
 			lastErrorMessage = "Stream socket closed unexpectedly";
 			continue;
@@ -1160,7 +1203,7 @@ static void* streamLoop(void* arg)
 			break;
 		}
 
-		dataReceivedTime = getTime() + to;
+		dataReceivedTime = Captury_getTime(); // get remote time
 
 		if (cpp->type == capturyStreamAck) {
 			lastHeartbeat = time(nullptr);
@@ -1170,14 +1213,14 @@ static void* streamLoop(void* arg)
 		if (cpp->type == capturyImageData) {
 			// received data for the image
 			CapturyImageDataPacket* cip = (CapturyImageDataPacket*)&buf[0];
-			//printf("received image data for actor %x (payload %d bytes)\n", cip->actor, cip->size-16);
+			//log("received image data for actor %x (payload %d bytes)\n", cip->actor, cip->size-16);
 
 			// check if we have a texture already
 			lockMutex(&mutex);
 			std::map<int, ActorData>::iterator it = actorData.find(cip->actor);
 			if (it == actorData.end()) {
 				unlockMutex(&mutex);
-				printf("received image data for actor %x without having received image header\n", cip->actor);
+				log("received image data for actor %x without having received image header\n", cip->actor);
 				continue;
 			}
 
@@ -1187,7 +1230,7 @@ static void* streamLoop(void* arg)
 			// check if packet fits
 			if (cip->offset >= imgSize || cip->offset + cip->size-16 > imgSize) {
 				unlockMutex(&mutex);
-				printf("received image data for actor %x (%d-%d) that is larger than header (%dx%d*3 = %d)\n", cip->actor, cip->offset, cip->offset+cip->size-16, it->second.currentTextures.width, it->second.currentTextures.height, imgSize);
+				log("received image data for actor %x (%d-%d) that is larger than header (%dx%d*3 = %d)\n", cip->actor, cip->offset, cip->offset+cip->size-16, it->second.currentTextures.width, it->second.currentTextures.height, imgSize);
 				continue;
 			}
 
@@ -1227,7 +1270,7 @@ static void* streamLoop(void* arg)
 				imPacket.actor = tp->actor;
 				imPacket.port = streamSocketPort;
 				if (send(sock, (const char*)&imPacket, imPacket.size, 0) != imPacket.size)
-					printf("cannot request streamed image data\n");
+					log("cannot request streamed image data\n");
 			}
 			continue;
 		}
@@ -1235,12 +1278,12 @@ static void* streamLoop(void* arg)
 		if (cpp->type == capturyStreamedImageData) {
 			// received data for the image
 			CapturyImageDataPacket* cip = (CapturyImageDataPacket*)&buf[0];
-//			printf("received image data for camera %d (payload %d bytes)\n", cip->actor, cip->size-16);
+//			log("received image data for camera %d (payload %d bytes)\n", cip->actor, cip->size-16);
 
 			// check if we have a texture already
 			std::map<int, CapturyImage>::iterator it = currentImages.find(cip->actor);
 			if (it == currentImages.end()) {
-				printf("received image data for camera %d without having received image header\n", cip->actor);
+				log("received image data for camera %d without having received image header\n", cip->actor);
 				continue;
 			}
 
@@ -1251,7 +1294,7 @@ static void* streamLoop(void* arg)
 			// check if packet fits
 			if (cip->offset >= imgSize || cip->offset + cip->size-16 > imgSize) {
 				unlockMutex(&mutex);
-				printf("received image data for camera %d (%d-%d) that is larger than header (%dx%d*3 = %d)\n", cip->actor, cip->offset, cip->offset+cip->size-16, it->second.width, it->second.height, imgSize);
+				log("received image data for camera %d (%d-%d) that is larger than header (%dx%d*3 = %d)\n", cip->actor, cip->offset, cip->offset+cip->size-16, it->second.width, it->second.height, imgSize);
 				continue;
 			}
 
@@ -1303,14 +1346,14 @@ static void* streamLoop(void* arg)
 		}
 
 		if (cpp->type == capturyARTag) {
-			//printf("received ARTag message\n");
+			//log("received ARTag message\n");
 			CapturyARTagPacket* art = (CapturyARTagPacket*)&buf[0];
 			lockMutex(&mutex);
 			arTagsTime = getTime();
 			arTags.resize(art->numTags);
 			memcpy(&arTags[0], &art->tags[0], sizeof(CapturyARTag) * art->numTags);
 			//for (int i = 0; i < art->numTags; ++i)
-			//	printf("  id %d: orient % 4.1f,% 4.1f,% 4.1f\n", art->tags[i].id, art->tags[i].transform.rotation[0], art->tags[i].transform.rotation[1], art->tags[i].transform.rotation[2]);
+			//	log("  id %d: orient % 4.1f,% 4.1f,% 4.1f\n", art->tags[i].id, art->tags[i].transform.rotation[0], art->tags[i].transform.rotation[1], art->tags[i].transform.rotation[2]);
 			unlockMutex(&mutex);
 			if (arTagCallback != NULL)
 				arTagCallback(art->numTags, &art->tags[0]);
@@ -1319,7 +1362,7 @@ static void* streamLoop(void* arg)
 
 		if (cpp->type == capturyActorModeChanged) {
 			CapturyActorModeChangedPacket* amc = (CapturyActorModeChangedPacket*)&buf[0];
-			printf("received actorModeChanged packet %x %d\n", amc->actor, amc->mode);
+			log("received actorModeChanged packet %x %d\n", amc->actor, amc->mode);
 			if (actorChangedCallback != NULL)
 				actorChangedCallback(amc->actor, amc->mode);
 			lockMutex(&mutex);
@@ -1387,12 +1430,12 @@ static void* streamLoop(void* arg)
 				receivedPoseTimestamp = 0;
 			}
 			unlockMutex(&mutex);
-			printf("latency received %" PRIu64 ", %" PRIu64 " - %" PRIu64 ", %" PRIu64 " - %" PRIu64 ",%" PRIu64 ",%" PRIu64 "\n", lp->firstImagePacket, lp->optimizationStart, lp->optimizationEnd, lp->sendPacketTime, dataAvailableTime, dataReceivedTime, receivedPoseTime);
+			log("latency received %" PRIu64 ", %" PRIu64 " - %" PRIu64 ", %" PRIu64 " - %" PRIu64 ",%" PRIu64 ",%" PRIu64 "\n", lp->firstImagePacket, lp->optimizationStart, lp->optimizationEnd, lp->sendPacketTime, dataAvailableTime, dataReceivedTime, receivedPoseTime);
 			continue;
 		}
 
 		if (cpp->type != capturyPose && cpp->type != capturyPose2 && cpp->type != capturyCompressedPose && cpp->type != capturyCompressedPose2) {
-			printf("stream socket received unrecognized packet %d\n", cpp->type);
+			log("stream socket received unrecognized packet %d\n", cpp->type);
 			continue;
 		}
 
@@ -1409,7 +1452,7 @@ static void* streamLoop(void* arg)
 		float* values;
 		int at;
 		if (cpp->type == capturyPose || cpp->type == capturyCompressedPose) {
-			// printf("actor %x: %d values: %g\n", cpp->actor, cpp->numValues, cpp->values[0]);
+			// log("actor %x: %d values: %g\n", cpp->actor, cpp->numValues, cpp->values[0]);
 			numValues = cpp->numValues;
 			values = cpp->values;
 			at = (int)((char*)(cpp->values) - (char*)cpp);
@@ -1420,7 +1463,7 @@ static void* streamLoop(void* arg)
 		}
 
 		if (actorsById.count(cpp->actor) != 0 && actorsById[cpp->actor] && actorsById[cpp->actor]->numJoints * 6 != numValues) {
-			printf("expected %d dofs, got %d\n", actorsById[cpp->actor]->numJoints * 6, numValues);
+			log("expected %d dofs, got %d\n", actorsById[cpp->actor]->numJoints * 6, numValues);
 			unlockMutex(&mutex);
 			continue;
 		}
@@ -1485,12 +1528,12 @@ static void* streamLoop(void* arg)
 
 	for (int i = 0; i < 3; ++i) {
 		if (send(streamSock, (const char*)&pkt, pkt.size, 0) != sizeof(pkt)) {
-			printf("failed sending stream nothing packet.\n");
+			log("failed sending stream nothing packet.\n");
 			continue;
 		}
 
 		if (receive(streamSock, capturyStreamAck)) {
-			printf("successfully sent stream nothing packet.\n");
+			log("successfully sent stream nothing packet.\n");
 			break;
 		}
 	}
@@ -1499,7 +1542,7 @@ static void* streamLoop(void* arg)
 
 	streamSocketPort = 0;
 
-	printf("closing streaming thread\n");
+	log("closing streaming thread\n");
 
 	delete packet;
 
@@ -1578,7 +1621,7 @@ extern "C" int Captury_connect2(const char* ip, unsigned short port, unsigned sh
 
 #ifndef WIN32
 	char buf[100];
-	printf("connected to %s:%d\n", inet_ntop(AF_INET, &addr, buf, 100), port);
+	log("connected to %s:%d\n", inet_ntop(AF_INET, &addr, buf, 100), port);
 #endif
 
 	return 1;
@@ -1791,10 +1834,15 @@ extern "C" int Captury_startStreaming(int what)
 	if ((what & CAPTURY_STREAM_IMAGES) != 0)
 		return 0;
 
-	return Captury_startStreamingImages(what, -1);
+	return Captury_startStreamingImagesAndAngles(what, -1, 0, nullptr);
 }
 
 extern "C" int Captury_startStreamingImages(int what, int32_t camId)
+{
+	Captury_startStreamingImagesAndAngles(what, camId, 0, nullptr);
+}
+
+extern "C" int Captury_startStreamingImagesAndAngles(int what, int32_t camId, int numAngles, uint16_t* angles)
 {
 	if (sock == -1)
 		return 0;
@@ -1806,11 +1854,21 @@ extern "C" int Captury_startStreamingImages(int what, int32_t camId)
 		Captury_stopStreaming();
 	}
 
-	CapturyStreamPacket* packet = new CapturyStreamPacket();
+	CapturyStreamPacket1* packet = (CapturyStreamPacket1*)malloc(sizeof(CapturyStreamPacket) + numAngles ? (2 + numAngles * 2) : 0);
 	packet->type = capturyStream;
-	packet->size = sizeof(CapturyStreamPacket);
+	packet->size = sizeof(CapturyStreamPacket) + numAngles ? (2 + numAngles * 2) : 0;
 	if (camId != -1) // only stream images if a camera is specified
 		what |= CAPTURY_STREAM_IMAGES;
+	else
+		what &= ~CAPTURY_STREAM_IMAGES;
+
+	if (numAngles != 0) { // only stream angles if a camera is specified
+		what |= CAPTURY_STREAM_ANGLES;
+		packet->numAngles = numAngles;
+		memcpy(packet->angles, angles, numAngles*2);
+	} else
+		what &= ~CAPTURY_STREAM_ANGLES; // disable angle streaming if no angles are specified
+
 	if ((what & CAPTURY_STREAM_LOCAL_POSES) == CAPTURY_STREAM_LOCAL_POSES) {
 		getLocalPoses = true;
 		what &= ~(CAPTURY_STREAM_LOCAL_POSES ^ CAPTURY_STREAM_GLOBAL_POSES);
@@ -1883,7 +1941,7 @@ extern "C" CapturyPose* Captury_getCurrentPoseAndTrackingConsistencyForActor(int
 		return NULL;
 	}
 
-//	uint64_t now = getTime();
+	// uint64_t now = getTime();
 	std::map<int, ActorData>::iterator it = actorData.find(actorId);
 	if (it == actorData.end()) {
 		char buf[400];
@@ -1933,6 +1991,20 @@ extern "C" void Captury_freePose(CapturyPose* pose)
 		free(pose);
 }
 
+extern "C" int Captury_getActorStatus(int actorId)
+{
+	lockMutex(&mutex);
+	std::map<int, ActorData>::iterator it = actorData.find(actorId);
+	if (it == actorData.end()) {
+		unlockMutex(&mutex);
+		return ACTOR_UNKNOWN;
+	}
+
+	CapturyActorStatus status = it->second.status;
+	unlockMutex(&mutex);
+
+	return status;
+}
 
 extern "C" CapturyARTag* Captury_getCurrentARTags()
 {
@@ -1971,7 +2043,7 @@ extern "C" int Captury_requestTexture(int actorId)
 	packet.size = sizeof(packet);
 	packet.actor = actorId;
 
-//	printf("requesting texture for actor %x\n", actor->id);
+//	log("requesting texture for actor %x\n", actor->id);
 
 	if (!sendPacket((CapturyRequestPacket*)&packet, capturyImageHeader))
 		return 0;
@@ -2033,7 +2105,7 @@ extern "C" uint64_t Captury_getMarkerTransform(int actorId, int joint, CapturyTr
 	packet.actor = actorId;
 	packet.joint = joint;
 
-	//printf("requesting marker transform for actor.joint %d.%d\n", actor->id, joint);
+	//log("requesting marker transform for actor.joint %d.%d\n", actor->id, joint);
 
 	if (!sendPacket((CapturyRequestPacket*)&packet, capturyMarkerTransform))
 		return 0;
@@ -2044,9 +2116,7 @@ extern "C" uint64_t Captury_getMarkerTransform(int actorId, int joint, CapturyTr
 
 	*trafo = markerTransforms[aj].trafo;
 
-	int64_t to;
-	atomicLoad(&timeOffset, &to);
-	return markerTransforms[aj].timestamp + to;
+	return getRemoteTime(markerTransforms[aj].timestamp);
 }
 
 extern "C" int Captury_getScalingProgress(int actorId)
@@ -2166,6 +2236,40 @@ extern "C" int Captury_stopRecording()
 	return 1;
 }
 
+#ifdef WIN32
+static DWORD WINAPI syncLoop(void* arg)
+#else
+static void* syncLoop(void* arg)
+#endif
+{
+	CapturyTimePacket2 packet;
+	packet.type = capturyGetTime2;
+	packet.size = sizeof(packet);
+
+	while (true) {
+		++nextTimeId;
+		packet.timeId = nextTimeId;
+
+		pingTime = getTime();
+		sendPacket((CapturyRequestPacket*)&packet, capturyTime2, 1);
+
+#ifdef WIN32
+		Sleep(10);
+#else
+		usleep(10000000);
+#endif
+	}
+}
+
+extern "C" void Captury_startTimeSynchronizationLoop()
+{
+#ifdef WIN32
+	syncThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)syncLoop, NULL, 0, NULL);
+#else
+	pthread_create(&syncThread, NULL, syncLoop, NULL);
+#endif
+}
+
 extern "C" uint64_t Captury_synchronizeTime()
 {
 	CapturyTimePacket2 packet;
@@ -2184,9 +2288,8 @@ extern "C" uint64_t Captury_synchronizeTime()
 
 extern "C" int64_t Captury_getTimeOffset()
 {
-	int64_t to;
-	atomicLoad(&timeOffset, &to);
-	return to;
+	int64_t now = getTime();
+	return Captury_getTime() - now;
 }
 
 extern "C" int Captury_setHalfplaneConstraint(int actorId, int jointIndex, float* originOffset, float* normal, float offset, uint64_t timestamp, float weight)
@@ -2548,10 +2651,10 @@ static void decompose(const float* mat, float* euler) // checked
 
 // static void dumpMatrix(const float* mat)
 // {
-// 	printf("%.4f %.4f %.4f  %.4f\n", mat[0], mat[1], mat[2], mat[3]);
-// 	printf("%.4f %.4f %.4f  %.4f\n", mat[4], mat[5], mat[6], mat[7]);
-// 	printf("%.4f %.4f %.4f  %.4f\n", mat[8], mat[9], mat[10], mat[11]);
-// 	printf("%.4f %.4f %.4f  %.4f\n", mat[12], mat[13], mat[14], mat[15]);
+// 	log("%.4f %.4f %.4f  %.4f\n", mat[0], mat[1], mat[2], mat[3]);
+// 	log("%.4f %.4f %.4f  %.4f\n", mat[4], mat[5], mat[6], mat[7]);
+// 	log("%.4f %.4f %.4f  %.4f\n", mat[8], mat[9], mat[10], mat[11]);
+// 	log("%.4f %.4f %.4f  %.4f\n", mat[12], mat[13], mat[14], mat[15]);
 // }
 
 void Captury_convertPoseToLocal(CapturyPose* pose, int actorId) REQUIRES(mutex)
@@ -2563,8 +2666,8 @@ void Captury_convertPoseToLocal(CapturyPose* pose, int actorId) REQUIRES(mutex)
 		transformationMatrix(at->rotation, at->translation, &matrices[i*16]);
 // 		float out[6];
 // 		decompose(&matrices[i*16], out+3);
-// 		printf("% .4f % .4f % .4f\n", at[3], at[4], at[5]);
-// 		printf("% .4f % .4f % .4f\n", out[3], out[4], out[5]);
+// 		log("% .4f % .4f % .4f\n", at[3], at[4], at[5]);
+// 		log("% .4f % .4f % .4f\n", out[3], out[4], out[5]);
 // 		float test[16];
 // 		transformationMatrix(out+3, at, test);
 // 		dumpMatrix(&matrices[i*16]);

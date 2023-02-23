@@ -44,6 +44,35 @@ CAPTURY_DLL_EXPORT const CapturyActor* Captury_getActor(int actorId);
 CAPTURY_DLL_EXPORT int Captury_getCameras(const CapturyCamera** cameras);
 
 
+#define CAPTURY_KNEE_FLEXION_EXTENSION		1
+#define CAPTURY_KNEE_VARUS_VALGUS		2
+#define CAPTURY_KNEE_ROTATION			3 // both internal and external
+#define CAPTURY_HIP_FLEXION_EXTENSION		4
+#define CAPTURY_HIP_ABADDUCTION			5 // both ab- and adduction
+#define CAPTURY_HIP_ROTATION			6 // both internal and external
+#define CAPTURY_ANKLE_FLEXION_EXTENSION		7
+#define CAPTURY_ANKLE_PRONATION_SUPINATION	8
+#define CAPTURY_ANKLE_ROTATION			9
+#define CAPTURY_SHOULDER_FLEXION_EXTENSION	10
+#define CAPTURY_SHOULDERTOTALFLEXION		11
+#define CAPTURY_SHOULDER_ABADDUCTION		12 // both ab- and adduction
+#define CAPTURY_SHOULDER_ROTATION		13
+#define CAPTURY_ELBOW_FLEXION_EXTENSION		14
+#define CAPTURY_FOREARM_PRONATION_SUPINATION	15
+#define CAPTURY_WRIST_FLEXION_EXTENSION		16
+#define CAPTURY_WRIST_RADIAL_ULNAR_DEVIATION	17
+#define CAPTURY_NECK_FLEXION_EXTENSION		18
+#define CAPTURY_NECK_ROTATION			19
+#define CAPTURY_NECK_LATERAL_BENDING		20
+#define CAPTURY_CENTER_OF_GRAVITY_X		21
+#define CAPTURY_CENTER_OF_GRAVITY_Y		22
+#define CAPTURY_CENTER_OF_GRAVITY_Z		23
+#define CAPTURY_HEAD_ROTATION			24
+#define CAPTURY_TORSO_ROTATION			25
+#define CAPTURY_TORSO_INCLINATION		26
+#define CAPTURY_HEAD_INCLINATION		27
+#define CAPTURY_TORSO_FLEXION			28
+
 
 
 #define CAPTURY_STREAM_NOTHING		0x0000
@@ -57,6 +86,7 @@ CAPTURY_DLL_EXPORT int Captury_getCameras(const CapturyCamera** cameras);
 #define CAPTURY_STREAM_LATENCY_INFO	0x0040
 #define CAPTURY_STREAM_FOOT_CONTACT	0x0080
 #define CAPTURY_STREAM_COMPRESSED	0x0100
+#define CAPTURY_STREAM_ANGLES		0x0200
 
 // returns 1 if successful, 0 otherwise
 CAPTURY_DLL_EXPORT int Captury_startStreaming(int what);
@@ -64,6 +94,10 @@ CAPTURY_DLL_EXPORT int Captury_startStreaming(int what);
 // if you want to stream images use this function rather than Captury_startStreaming()
 // returns 1 if successfull otherwise 0
 CAPTURY_DLL_EXPORT int Captury_startStreamingImages(int what, int32_t cameraId);
+
+// if you want to stream images use this function rather than Captury_startStreaming()
+// returns 1 if successfull otherwise 0
+CAPTURY_DLL_EXPORT int Captury_startStreamingImagesAndAngles(int what, int32_t cameraId, int numAngles, uint16_t* angles);
 
 
 // equivalent to Captury_startStreaming(CAPTURY_STREAM_NOTHING)
@@ -88,9 +122,12 @@ typedef void (*CapturyNewPoseCallback)(CapturyActor*, CapturyPose*, int tracking
 // returns 1 if successful otherwise 0
 CAPTURY_DLL_EXPORT int Captury_registerNewPoseCallback(CapturyNewPoseCallback callback);
 
-typedef enum { ACTOR_SCALING, ACTOR_TRACKING, ACTOR_STOPPED, ACTOR_DELETED } CapturyActorStatus;
+typedef enum { ACTOR_SCALING = 0, ACTOR_TRACKING = 1, ACTOR_STOPPED = 2, ACTOR_DELETED = 3, ACTOR_UNKNOWN = 4 } CapturyActorStatus;
 extern const char* CapturyActorStatusString[];
 typedef void (*CapturyActorChangedCallback)(int actorId, int mode);
+// returns CapturyActorStatus if the actorId is not known returns ACTOR_UNKNOWN
+// this retrieves the local status. it causes no network traffic and should be fast.
+CAPTURY_DLL_EXPORT int Captury_getActorStatus(int actorId);
 
 // register callback that will be called when a new actor is found or
 // the status of an existing actor changes
@@ -150,10 +187,15 @@ CAPTURY_DLL_EXPORT void Captury_freeImage(CapturyImage* image);
 // returns the current time in microseconds
 CAPTURY_DLL_EXPORT uint64_t Captury_synchronizeTime();
 
+// start a thread that continuously synchronizes the time with Captury Live
+// if this is running it is not necessary to call Captury_synchronizeTime()
+CAPTURY_DLL_EXPORT void Captury_startTimeSynchronizationLoop();
+
 // returns the current time as measured by Captury Live in microseconds
 CAPTURY_DLL_EXPORT uint64_t Captury_getTime();
 
 // returns the difference between the local and the remote time in microseconds
+// offset = CapturyLive.time - local.time
 CAPTURY_DLL_EXPORT int64_t Captury_getTimeOffset();
 
 
@@ -299,6 +341,8 @@ CAPTURY_DLL_EXPORT int Captury_getBackgroundQuality();
 
 CAPTURY_DLL_EXPORT const char* Captury_getStatus(); // do not free.
 
+CAPTURY_DLL_EXPORT const char* Captury_getNextLogMessage(); // do free.
+
 //
 // it is safe to ignore everything below this line
 //
@@ -337,6 +381,7 @@ typedef enum { capturyActors = 1, capturyActor = 2,
 	       capturyCompressedPose = 65, capturyCompressedPose2 = 66,
 	       capturyCompressedPoseCont = 67,
 	       capturyGetTime2 = 68, capturyTime2 = 69,
+	       capturyAngles = 70,
 	       capturyError = 0 } CapturyPacketTypes;
 
 // returns a string for nicer error messages
@@ -453,6 +498,17 @@ struct CapturyStreamPacket {
 	int32_t		cameraId;	// valid if what & CAPTURY_STREAM_IMAGES
 };
 
+// sent to server
+struct CapturyStreamPacket1 {
+	int32_t		type;		// capturyStream
+	int32_t		size;		// size of full message including type and size
+
+	int32_t		what;		// CAPTURY_STREAM_POSES or CAPTURY_STREAM_NOTHING
+	int32_t		cameraId;	// valid if what & CAPTURY_STREAM_IMAGES
+	uint16_t	numAngles;
+	uint16_t	angles[];
+};
+
 // sent to client
 // as a reply to CapturyRequestPacket = capturyDaySessionShot
 struct CapturyDaySessionShotPacket {
@@ -507,6 +563,20 @@ struct CapturyPoseCont {
 	int32_t		actor;
 	uint64_t	timestamp;
 	float		values[];
+};
+
+// sent to client
+struct CapturyAnglesPacket {
+	int32_t		type;	// capturyAngles
+	int32_t		size;
+
+	int32_t		actor;
+	uint64_t	timestamp;
+	uint16_t	numAngles;
+	struct AngleData {
+		uint16_t	angle;
+		float		value;
+	} angles[];
 };
 
 // sent to server
