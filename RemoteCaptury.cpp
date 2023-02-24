@@ -80,8 +80,9 @@ static HANDLE		thread;
 static HANDLE		syncThread;
 static CRITICAL_SECTION	mutex;
 static CRITICAL_SECTION	partialActorMutex;
-static CRITICAL_SECTION	syncMutex;
-#define socklen_t	int
+static CRITICAL_SECTION syncMutex;
+static CRITICAL_SECTION logMutex;
+#define socklen_t int
 #else
 #define SOCKET		int
 #define closesocket	close
@@ -96,6 +97,7 @@ struct CAPABILITY("mutex") MutexStruct {
 static MutexStruct mutex;
 static MutexStruct partialActorMutex;
 static MutexStruct syncMutex;
+static MutexStruct logMutex;
 // static pthread_mutex_t	mutex = PTHREAD_MUTEX_INITIALIZER;
 #endif
 
@@ -225,21 +227,9 @@ static void*					backgroundFinishedCallbackUserData = NULL;
 
 static std::list<std::string>		logs;
 
+#ifndef WIN32
 static void log(const char *format, ...) __attribute__((format(printf,1,2)));
-static void log(const char *format, ...)
-{
-	char buffer[500];
-	va_list args;
-	va_start(args, format);
-	vsnprintf(buffer, 500, format, args);
-	va_end(args);
-
-	logs.emplace_back(buffer);
-	printf("%s", buffer);
-
-	if (logs.size() > 100000)
-		logs.pop_front();
-}
+#endif
 
 struct Sync {
 	double localOffset;
@@ -248,7 +238,7 @@ struct Sync {
 
 	Sync(double lo, double o, double f) : localOffset(lo), offset(o), factor(f) {}
 
-	uint64_t getRemoteTime(uint64_t localT)	{ return (localT - localOffset) * factor + offset; }
+	uint64_t getRemoteTime(uint64_t localT)	{ return uint64_t((localT - localOffset) * factor + offset); }
 };
 
 struct SyncSample {
@@ -281,10 +271,35 @@ static inline void unlockMutex(MutexStruct* mtx) RELEASE(mtx)
 }
 #endif
 
+static void log(const char* format, ...)
+{
+	char buffer[500];
+	va_list args;
+	va_start(args, format);
+	vsnprintf(buffer, 500, format, args);
+	va_end(args);
+
+	printf("%s", buffer);
+
+	lockMutex(&logMutex);
+	logs.emplace_back(buffer);
+
+	if (logs.size() > 100000)
+		logs.pop_front();
+	unlockMutex(&logMutex);
+}
+
 const char* Captury_getNextLogMessage()
 {
+	lockMutex(&logMutex);
+	if (logs.empty()) {
+		unlockMutex(&logMutex);
+		return nullptr;
+	}
+
 	const char* str = strdup(logs.front().c_str());
 	logs.pop_front();
+	unlockMutex(&logMutex);
 
 	return str;
 }
@@ -529,10 +544,10 @@ static void updateSync(uint64_t localT)
 	// transitionFactor = std::abs(transitionStartRemoteT - remoteT) / defaultTransitionTime;
 	// TODO limit skew speed
 	transitionEndLocalT = transitionStartLocalT + defaultTransitionTime;
-	double transitionStartRemoteT = currentSync.getRemoteTime(localT);
+	double transitionStartRemoteT = (double)currentSync.getRemoteTime(localT);
 
 	currentSync = tempSync;
-	oldSync.localOffset = localT;
+	oldSync.localOffset = (double)localT;
 	oldSync.offset = transitionStartRemoteT;
 	oldSync.factor = currentSync.factor;
 
@@ -554,10 +569,10 @@ static uint64_t getRemoteTime(uint64_t localT)
 
 	uint64_t oldEstimate = oldSync.getRemoteTime(localT);
 	uint64_t newEstimate = currentSync.getRemoteTime(localT);
-	double at = (localT - transitionStartLocalT) / (transitionEndLocalT - transitionStartLocalT);
+	double at = double(localT - transitionStartLocalT) / (transitionEndLocalT - transitionStartLocalT);
 	unlockMutex(&syncMutex);
 	// log("sync: local %" PRIu64 " old %" PRIu64 " new %" PRIu64 " -> %" PRIu64 "\n", localT, oldEstimate, newEstimate, (uint64_t)(oldEstimate * (1.0 - at) + newEstimate * at));
-	return oldEstimate * (1.0 - at) + newEstimate * at;
+	return (uint64_t)(oldEstimate * (1.0 - at) + newEstimate * at);
 }
 
 extern "C" uint64_t Captury_getTime()
@@ -1560,6 +1575,8 @@ extern "C" int Captury_connect2(const char* ip, unsigned short port, unsigned sh
 #ifdef WIN32
 	InitializeCriticalSection(&mutex);
 	InitializeCriticalSection(&partialActorMutex);
+	InitializeCriticalSection(&syncMutex);
+	InitializeCriticalSection(&logMutex);
 #endif
 
 	if (sock == -1) {
@@ -1676,6 +1693,8 @@ extern "C" int Captury_disconnect()
 #ifdef WIN32
 	DeleteCriticalSection(&mutex);
 	DeleteCriticalSection(&partialActorMutex);
+	DeleteCriticalSection(&syncMutex);
+	DeleteCriticalSection(&logMutex);
 #endif
 
 	return 1;
@@ -1839,7 +1858,7 @@ extern "C" int Captury_startStreaming(int what)
 
 extern "C" int Captury_startStreamingImages(int what, int32_t camId)
 {
-	Captury_startStreamingImagesAndAngles(what, camId, 0, nullptr);
+	return Captury_startStreamingImagesAndAngles(what, camId, 0, nullptr);
 }
 
 extern "C" int Captury_startStreamingImagesAndAngles(int what, int32_t camId, int numAngles, uint16_t* angles)
@@ -1854,9 +1873,9 @@ extern "C" int Captury_startStreamingImagesAndAngles(int what, int32_t camId, in
 		Captury_stopStreaming();
 	}
 
-	CapturyStreamPacket1* packet = (CapturyStreamPacket1*)malloc(sizeof(CapturyStreamPacket) + numAngles ? (2 + numAngles * 2) : 0);
+	CapturyStreamPacket1* packet = (CapturyStreamPacket1*)malloc(sizeof(CapturyStreamPacket) + (numAngles ? (2 + numAngles * 2) : 0));
 	packet->type = capturyStream;
-	packet->size = sizeof(CapturyStreamPacket) + numAngles ? (2 + numAngles * 2) : 0;
+	packet->size = sizeof(CapturyStreamPacket) + (numAngles ? (2 + numAngles * 2) : 0);
 	if (camId != -1) // only stream images if a camera is specified
 		what |= CAPTURY_STREAM_IMAGES;
 	else
@@ -2254,9 +2273,9 @@ static void* syncLoop(void* arg)
 		sendPacket((CapturyRequestPacket*)&packet, capturyTime2, 1);
 
 #ifdef WIN32
-		Sleep(10);
+		Sleep(500);
 #else
-		usleep(10000000);
+		usleep(500000);
 #endif
 	}
 }
