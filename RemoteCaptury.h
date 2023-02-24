@@ -341,6 +341,7 @@ CAPTURY_DLL_EXPORT int Captury_getBackgroundQuality();
 
 CAPTURY_DLL_EXPORT const char* Captury_getStatus(); // do not free.
 
+CAPTURY_DLL_EXPORT void Captury_enablePrintf(int on); // 0 to turn off
 CAPTURY_DLL_EXPORT const char* Captury_getNextLogMessage(); // do free.
 
 //

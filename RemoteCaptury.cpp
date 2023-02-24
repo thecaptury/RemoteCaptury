@@ -225,6 +225,7 @@ static int					backgroundQuality = -1;
 static CapturyBackgroundFinishedCallback	backgroundFinishedCallback = NULL;
 static void*					backgroundFinishedCallbackUserData = NULL;
 
+static bool				doPrintf = true;
 static std::list<std::string>		logs;
 
 #ifndef WIN32
@@ -279,7 +280,8 @@ static void log(const char* format, ...)
 	vsnprintf(buffer, 500, format, args);
 	va_end(args);
 
-	printf("%s", buffer);
+	if (doPrintf)
+		printf("%s", buffer);
 
 	lockMutex(&logMutex);
 	logs.emplace_back(buffer);
@@ -287,6 +289,11 @@ static void log(const char* format, ...)
 	if (logs.size() > 100000)
 		logs.pop_front();
 	unlockMutex(&logMutex);
+}
+
+void Captury_enablePrintf(int on)
+{
+	doPrintf = (on != 0);
 }
 
 const char* Captury_getNextLogMessage()
@@ -2273,9 +2280,9 @@ static void* syncLoop(void* arg)
 		sendPacket((CapturyRequestPacket*)&packet, capturyTime2, 1);
 
 #ifdef WIN32
-		Sleep(500);
+		Sleep(1000);
 #else
-		usleep(500000);
+		usleep(1000000);
 #endif
 	}
 }
