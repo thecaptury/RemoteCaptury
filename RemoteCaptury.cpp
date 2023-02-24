@@ -225,6 +225,7 @@ static int					backgroundQuality = -1;
 static CapturyBackgroundFinishedCallback	backgroundFinishedCallback = NULL;
 static void*					backgroundFinishedCallbackUserData = NULL;
 
+static bool				doPrintf = true;
 static std::list<std::string>		logs;
 
 #ifndef WIN32
@@ -279,7 +280,8 @@ static void log(const char* format, ...)
 	vsnprintf(buffer, 500, format, args);
 	va_end(args);
 
-	printf("%s", buffer);
+	if (doPrintf)
+		printf("%s", buffer);
 
 	lockMutex(&logMutex);
 	logs.emplace_back(buffer);
@@ -287,6 +289,11 @@ static void log(const char* format, ...)
 	if (logs.size() > 100000)
 		logs.pop_front();
 	unlockMutex(&logMutex);
+}
+
+void Captury_enablePrintf(int on)
+{
+	doPrintf = (on != 0);
 }
 
 const char* Captury_getNextLogMessage()
@@ -497,34 +504,71 @@ static uint64_t getTime()
 #endif
 }
 
-static void computeSync(Sync& s)
+//
+// the approach this function takes may not be obvious.
+//
+// generally the goal is to estimate remote time r as a function of the local time l.
+// we assume that r = l * f + o
+// i.e. there is an offset between the clocks and a linear drift
+//
+// given some measurement samples the goal is to compute the two parameters f and o
+//
+// the naive approach of estimating the parameters directly with a linear system fails
+// because of numerical instability. that's why we first subtract mean/median and then
+// solve the following:
+//
+// b = r - l - median(r-l)
+// a = l - mean(l)
+// a * f = b
+// f = a \ b                                    <=>
+// f = (a . b) / sum(a.^2)      <- least squares solution
+// (l - mean(l)) * f = b                        <=>
+// (l - mean(l)) * f = r - l - median(r-l)      <=>
+// (l - mean(l)) * f + l + median(r-l) = r      <=>
+// (l - mean(l)) * f + l + median(r-l) = r      <=>
+// l * (f + 1) + median(r-l) - mean(l) * f = r
+//
+// if there are only a few samples we cannot estimate the slope f accurately. so we
+// just estimate an offset (the median of the time differences between remote and local)
+//
+void computeSync(Sync& s)
 {
 	double meanLocalT = 0;
-	double meanRemoteT = 0;
-	double offset = 0;
-	double scale = 1.0 / syncSamples.size();
+	double medianOffset = 0.0;
 
-	for (SyncSample& ss : syncSamples) {
-		meanLocalT += ss.localT * scale;
-		meanRemoteT += ss.remoteT * scale;
-		offset += (ss.remoteT - ss.localT) * scale;
+	int64_t offsets[50];
+
+	int num = syncSamples.size();
+	for (int i = 0; i < num; ++i) {
+		SyncSample& ss = syncSamples[i];
+		offsets[i] = ss.remoteT - ss.localT; // alternatively use median here
+		meanLocalT += ss.localT;
 	}
 
-	if (syncSamples.size() < 10 || (syncSamples.back().localT - syncSamples.front().localT) < 1000000) { // not enough samples
+	std::sort(&offsets[0], &offsets[num]);
+	medianOffset = (num % 2 == 0) ? (offsets[num/2] + offsets[num/2+1]) * 0.5 : offsets[num/2];
+
+	if (num < 10 || (syncSamples.back().localT - syncSamples.front().localT) < 1000000) { // not enough samples
 		s.localOffset = 0.0;
-		s.offset = offset;
+		s.offset = medianOffset;
 		s.factor = 1.0;
-		log("sync based on %d samples: offset %g\n", (int)syncSamples.size(), s.offset);
+		log("sync based on %d samples: offset %g\n", num, s.offset);
 	} else {
-		s.localOffset = meanLocalT;
-		s.offset = meanRemoteT;
-		s.factor = 1.0;
+		s.localOffset = 0.0;
+		s.offset = medianOffset;
+		s.factor = 0.0;
+		meanLocalT /= num;
+		double sumAsqr = 0.0;
 		for (SyncSample& ss : syncSamples) {
-			double f = (ss.remoteT - meanRemoteT) / (ss.localT - meanLocalT);
-			s.factor *= f;
+			double a = ss.localT - meanLocalT;
+			sumAsqr += a*a;
+			double b = ss.remoteT - ss.localT - medianOffset;
+			s.factor += a*b;
 		}
-		s.factor *= std::pow(s.factor, scale);
-		log("sync based on %d samples: offset %g, factor %g (mlt %g, mrt %g)\n", (int)syncSamples.size(), s.offset, s.factor, meanLocalT, meanRemoteT);
+		s.factor /= sumAsqr;
+		s.offset -= meanLocalT * s.factor;
+		s.factor += 1.0;
+		log("sync based on %d samples: offset %15f, factor %.15f (mlt %15f, moff %15f)\n", num, s.offset, s.factor, meanLocalT, meanOffset);
 	}
 }
 
@@ -2273,9 +2317,9 @@ static void* syncLoop(void* arg)
 		sendPacket((CapturyRequestPacket*)&packet, capturyTime2, 1);
 
 #ifdef WIN32
-		Sleep(500);
+		Sleep(1000);
 #else
-		usleep(500000);
+		usleep(1000000);
 #endif
 	}
 }
