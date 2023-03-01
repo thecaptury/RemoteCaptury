@@ -25,6 +25,7 @@
 #define NTDDI_WIN7SP1 0
 #define snprintf _snprintf
 #include <winsock2.h>
+#include <sysinfoapi.h>
 #pragma comment(lib, "ws2_32.lib")
 #ifndef PRIu64
   #define PRIu64 "I64u"
@@ -224,6 +225,8 @@ static int32_t		nextTimeId = 213;
 static int					backgroundQuality = -1;
 static CapturyBackgroundFinishedCallback	backgroundFinishedCallback = NULL;
 static void*					backgroundFinishedCallbackUserData = NULL;
+
+static int64_t				startRecordingTime = 0;
 
 static bool				doPrintf = true;
 static std::list<std::string>		logs;
@@ -458,13 +461,13 @@ const char* Captury_getHumanReadableMessageType(CapturyPacketTypes type)
 	return "<unknown message type>";
 }
 
-#ifdef WIN32
+#ifdef SYSTEM_INFO
 // thanks https://www.frenk.com/2009/12/convert-filetime-to-unix-timestamp/
 // A UNIX timestamp contains the number of seconds from Jan 1, 1970, while the FILETIME documentation says:
 // Contains a 64-bit value representing the number of 100-nanosecond intervals since January 1, 1601 (UTC).
 //
 // Between Jan 1, 1601 and Jan 1, 1970 there are 11644473600 seconds, so we will just subtract that value:
-uint64_t convertFileTimeToTimestamp(FILETIME& ft)
+static uint64_t convertFileTimeToTimestamp(FILETIME& ft)
 {
 	// takes the last modified date
 	LARGE_INTEGER date, adjust;
@@ -867,7 +870,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 			// we assume that the network transfer time is symmetric
 			// so the timestamp given in the packet was captured at (pingTime + pongTime) / 2
 			uint64_t t = (pongTime - pingTime) / 2 + pingTime;
-			syncSamples.emplace_back(t, tp->timestamp, pongTime - pingTime);
+			syncSamples.emplace_back(t, tp->timestamp, (uint32_t)(pongTime - pingTime));
 			if (syncSamples.size() > 50)
 				syncSamples.erase(syncSamples.begin());
 			updateSync(t);
@@ -939,6 +942,10 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 		case capturyStatus: {
 			CapturyStatusPacket* sp = (CapturyStatusPacket*)&buf[0];
 			lastStatusMessage = sp->message; // FIXME this is unsafe. assumes that message is 0 terminated.
+			break; }
+		case capturyStartRecordingAck2: {
+			CapturyTimePacket* srp = (CapturyTimePacket*)&buf[0];
+			startRecordingTime = srp->timestamp;
 			break; }
 		case capturyStreamAck:
 		case capturySetShotAck:
@@ -2231,19 +2238,21 @@ extern "C" int Captury_setShotName(const char* name)
 
 // you have to set the shot name before starting to record - or make sure that it has been set using CapturyLive
 // returns 1 if successful, 0 otherwise
-extern "C" int Captury_startRecording()
+extern "C" int64_t Captury_startRecording()
 {
 	if (sock == -1)
 		return 0;
 
 	CapturyRequestPacket packet;
-	packet.type = capturyStartRecording;
+	packet.type = capturyStartRecording2;
 	packet.size = sizeof(packet);
 
-	if (!sendPacket(&packet, capturyStartRecordingAck))
+	startRecordingTime = 0;
+
+	if (!sendPacket(&packet, capturyStartRecordingAck2))
 		return 0;
 
-	return 1;
+	return startRecordingTime;
 }
 
 // returns 1 if successful, 0 otherwise
