@@ -101,6 +101,7 @@ static MutexStruct syncMutex;
 static MutexStruct logMutex;
 // static pthread_mutex_t	mutex = PTHREAD_MUTEX_INITIALIZER;
 #endif
+static bool syncLoopIsRunning = false;
 
 static std::string currentDay;
 static std::string currentSession;
@@ -236,13 +237,12 @@ static void log(const char *format, ...) __attribute__((format(printf,1,2)));
 #endif
 
 struct Sync {
-	double localOffset;
 	double offset;
 	double factor;
 
-	Sync(double lo, double o, double f) : localOffset(lo), offset(o), factor(f) {}
+	Sync(double o, double f) : offset(o), factor(f) {}
 
-	uint64_t getRemoteTime(uint64_t localT)	{ return uint64_t((localT - localOffset) * factor + offset); }
+	uint64_t getRemoteTime(uint64_t localT)	{ return uint64_t((localT) * factor + offset); }
 };
 
 struct SyncSample {
@@ -552,12 +552,10 @@ void computeSync(Sync& s)
 	medianOffset = (num % 2 == 0) ? (offsets[num/2] + offsets[num/2+1]) * 0.5 : offsets[num/2];
 
 	if (num < 10 || (syncSamples.back().localT - syncSamples.front().localT) < 1000000) { // not enough samples
-		s.localOffset = 0.0;
 		s.offset = medianOffset;
 		s.factor = 1.0;
 		log("sync based on %d samples: offset %g\n", num, s.offset);
 	} else {
-		s.localOffset = 0.0;
 		s.offset = medianOffset;
 		s.factor = 0.0;
 		meanLocalT /= num;
@@ -571,18 +569,18 @@ void computeSync(Sync& s)
 		s.factor /= sumAsqr;
 		s.offset -= meanLocalT * s.factor;
 		s.factor += 1.0;
-		log("sync based on %d samples: offset %15f, factor %.15f (mlt %15f, moff %15f)\n", num, s.offset, s.factor, meanLocalT, meanOffset);
+		log("sync based on %d samples: offset %15f, factor %.15f (mlt %15f, moff %15f)\n", num, s.offset, s.factor, meanLocalT, medianOffset);
 	}
 }
 
-static Sync oldSync GUARDED_BY(syncMutex) = Sync(0.0, 0.0, 1.0);
-static Sync currentSync GUARDED_BY(syncMutex) = Sync(0.0, 0.0, 1.0);
+static Sync oldSync GUARDED_BY(syncMutex) = Sync(0.0, 1.0);
+static Sync currentSync GUARDED_BY(syncMutex) = Sync(0.0, 1.0);
 static uint64_t transitionStartLocalT GUARDED_BY(syncMutex) = 0;
 static uint64_t transitionEndLocalT GUARDED_BY(syncMutex) = 0;
 static void updateSync(uint64_t localT)
 {
 	constexpr uint64_t defaultTransitionTime = 100000; // 0.1 second
-	Sync tempSync(0.0, 0.0, 1.0);
+	Sync tempSync(0.0, 1.0);
 	computeSync(tempSync);
 
 	lockMutex(&syncMutex);
@@ -594,7 +592,6 @@ static void updateSync(uint64_t localT)
 	double transitionStartRemoteT = (double)currentSync.getRemoteTime(localT);
 
 	currentSync = tempSync;
-	oldSync.localOffset = (double)localT;
 	oldSync.offset = transitionStartRemoteT;
 	oldSync.factor = currentSync.factor;
 
@@ -2335,11 +2332,16 @@ static void* syncLoop(void* arg)
 
 extern "C" void Captury_startTimeSynchronizationLoop()
 {
+	if (syncLoopIsRunning)
+		return;
+
 #ifdef WIN32
 	syncThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)syncLoop, NULL, 0, NULL);
 #else
 	pthread_create(&syncThread, NULL, syncLoop, NULL);
 #endif
+
+	syncLoopIsRunning = true;
 }
 
 extern "C" uint64_t Captury_synchronizeTime()
@@ -2360,8 +2362,10 @@ extern "C" uint64_t Captury_synchronizeTime()
 
 extern "C" int64_t Captury_getTimeOffset()
 {
-	int64_t now = getTime();
-	return Captury_getTime() - now;
+	lockMutex(&syncMutex);
+	int64_t offset = currentSync.offset;
+	unlockMutex(&syncMutex);
+	return offset;
 }
 
 extern "C" int Captury_setHalfplaneConstraint(int actorId, int jointIndex, float* originOffset, float* normal, float offset, uint64_t timestamp, float weight)
