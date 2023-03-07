@@ -50,19 +50,6 @@
 
 typedef uint32_t uint;
 
-#if defined WIN32 || defined _WIN32 && !defined __CYGWIN__
-  static inline void atomicStore(int64_t* ptr, int64_t value) { InterlockedExchange64(ptr, value); }
-  static inline void atomicLoad(int64_t* srcPtr, int64_t* dstPtr) { *dstPtr = InterlockedOr64(srcPtr, 0); }
-#else
-  #if ((__GNUC__ * 100 + __GNUC_MINOR__ * 10) > 464)
-    #define atomicStore(dstPtr, value)	__atomic_store(dstPtr, &(value), __ATOMIC_RELAXED)
-    #define atomicLoad(srcPtr, dstPtr)	__atomic_load(srcPtr, dstPtr, __ATOMIC_RELAXED)
-  #else
-    #define atomicStore(where, what)	*(where) = (what);
-    #define atomicLoad(srcPtr, dstPtr)	*(dstPtr) = *(srcPtr);
-  #endif
-#endif
-
 #if defined(__clang__) && (!defined(SWIG))
 #define THREAD_ANNOTATION_ATTRIBUTE__(x)   __attribute__((x))
 #else
@@ -206,6 +193,7 @@ static std::string lastStatusMessage;
 static bool getLocalPoses = false;
 
 static CapturyNewPoseCallback newPoseCallback = NULL;
+static CapturyNewAnglesCallback newAnglesCallback = NULL;
 static CapturyActorChangedCallback actorChangedCallback = NULL;
 static CapturyARTagCallback arTagCallback = NULL;
 static CapturyImageCallback imageCallback = NULL;
@@ -1423,6 +1411,13 @@ static void* streamLoop(void* arg)
 			continue;
 		}
 
+		if (cpp->type == capturyAngles) {
+			CapturyAnglesPacket* ang = (CapturyAnglesPacket*)&buf[0];
+			if (newAnglesCallback != NULL)
+				newAnglesCallback(Captury_getActor(ang->actor), ang->numAngles, ang->angles);
+			continue;
+		}
+
 		if (cpp->type == capturyActorModeChanged) {
 			CapturyActorModeChangedPacket* amc = (CapturyActorModeChangedPacket*)&buf[0];
 			log("received actorModeChanged packet %x %d\n", amc->actor, amc->mode);
@@ -2569,6 +2564,24 @@ int Captury_registerNewPoseCallback(CapturyNewPoseCallback callback)
 		return 0;
 
 	newPoseCallback = callback;
+	return 1;
+}
+
+
+int Captury_registerNewAnglesCallback(CapturyNewAnglesCallback callback)
+{
+	if (newAnglesCallback != NULL) { // callback already exists
+		if (callback == NULL) { // remove callback
+			newAnglesCallback = NULL;
+			return 1;
+		} else
+			return 0;
+	}
+
+	if (callback == NULL) // trying to erase callback that is not there
+		return 0;
+
+	newAnglesCallback = callback;
 	return 1;
 }
 

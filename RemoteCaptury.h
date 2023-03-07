@@ -44,34 +44,51 @@ CAPTURY_DLL_EXPORT const CapturyActor* Captury_getActor(int actorId);
 CAPTURY_DLL_EXPORT int Captury_getCameras(const CapturyCamera** cameras);
 
 
-#define CAPTURY_KNEE_FLEXION_EXTENSION		1
-#define CAPTURY_KNEE_VARUS_VALGUS		2
-#define CAPTURY_KNEE_ROTATION			3 // both internal and external
-#define CAPTURY_HIP_FLEXION_EXTENSION		4
-#define CAPTURY_HIP_ABADDUCTION			5 // both ab- and adduction
-#define CAPTURY_HIP_ROTATION			6 // both internal and external
-#define CAPTURY_ANKLE_FLEXION_EXTENSION		7
-#define CAPTURY_ANKLE_PRONATION_SUPINATION	8
-#define CAPTURY_ANKLE_ROTATION			9
-#define CAPTURY_SHOULDER_FLEXION_EXTENSION	10
-#define CAPTURY_SHOULDERTOTALFLEXION		11
-#define CAPTURY_SHOULDER_ABADDUCTION		12 // both ab- and adduction
-#define CAPTURY_SHOULDER_ROTATION		13
-#define CAPTURY_ELBOW_FLEXION_EXTENSION		14
-#define CAPTURY_FOREARM_PRONATION_SUPINATION	15
-#define CAPTURY_WRIST_FLEXION_EXTENSION		16
-#define CAPTURY_WRIST_RADIAL_ULNAR_DEVIATION	17
-#define CAPTURY_NECK_FLEXION_EXTENSION		18
-#define CAPTURY_NECK_ROTATION			19
-#define CAPTURY_NECK_LATERAL_BENDING		20
-#define CAPTURY_CENTER_OF_GRAVITY_X		21
-#define CAPTURY_CENTER_OF_GRAVITY_Y		22
-#define CAPTURY_CENTER_OF_GRAVITY_Z		23
-#define CAPTURY_HEAD_ROTATION			24
-#define CAPTURY_TORSO_ROTATION			25
-#define CAPTURY_TORSO_INCLINATION		26
-#define CAPTURY_HEAD_INCLINATION		27
-#define CAPTURY_TORSO_FLEXION			28
+#define CAPTURY_LEFT_KNEE_FLEXION_EXTENSION		1
+#define CAPTURY_LEFT_KNEE_VARUS_VALGUS			2
+#define CAPTURY_LEFT_KNEE_ROTATION			3 // both internal and external
+#define CAPTURY_LEFT_HIP_FLEXION_EXTENSION		4
+#define CAPTURY_LEFT_HIP_ABADDUCTION			5 // both ab- and adduction
+#define CAPTURY_LEFT_HIP_ROTATION			6 // both internal and external
+#define CAPTURY_LEFT_ANKLE_FLEXION_EXTENSION		7
+#define CAPTURY_LEFT_ANKLE_PRONATION_SUPINATION		8
+#define CAPTURY_LEFT_ANKLE_ROTATION			9
+#define CAPTURY_LEFT_SHOULDER_FLEXION_EXTENSION		10
+#define CAPTURY_LEFT_SHOULDER_TOTAL_FLEXION		11
+#define CAPTURY_LEFT_SHOULDER_ABADDUCTION		12 // both ab- and adduction
+#define CAPTURY_LEFT_SHOULDER_ROTATION			13
+#define CAPTURY_LEFT_ELBOW_FLEXION_EXTENSION		14
+#define CAPTURY_LEFT_FOREARM_PRONATION_SUPINATION	15
+#define CAPTURY_LEFT_WRIST_FLEXION_EXTENSION		16
+#define CAPTURY_LEFT_WRIST_RADIAL_ULNAR_DEVIATION	17
+#define CAPTURY_RIGHT_KNEE_FLEXION_EXTENSION		18
+#define CAPTURY_RIGHT_KNEE_VARUS_VALGUS			19
+#define CAPTURY_RIGHT_KNEE_ROTATION			20 // both internal and external
+#define CAPTURY_RIGHT_HIP_FLEXION_EXTENSION		21
+#define CAPTURY_RIGHT_HIP_ABADDUCTION			22 // both ab- and adduction
+#define CAPTURY_RIGHT_HIP_ROTATION			23 // both internal and external
+#define CAPTURY_RIGHT_ANKLE_FLEXION_EXTENSION		24
+#define CAPTURY_RIGHT_ANKLE_PRONATION_SUPINATION	25
+#define CAPTURY_RIGHT_ANKLE_ROTATION			26
+#define CAPTURY_RIGHT_SHOULDER_FLEXION_EXTENSION	27
+#define CAPTURY_RIGHT_SHOULDER_TOTAL_FLEXION		28
+#define CAPTURY_RIGHT_SHOULDER_ABADDUCTION		29 // both ab- and adduction
+#define CAPTURY_RIGHT_SHOULDER_ROTATION			30
+#define CAPTURY_RIGHT_ELBOW_FLEXION_EXTENSION		31
+#define CAPTURY_RIGHT_FOREARM_PRONATION_SUPINATION	32
+#define CAPTURY_RIGHT_WRIST_FLEXION_EXTENSION		33
+#define CAPTURY_RIGHT_WRIST_RADIAL_ULNAR_DEVIATION	34
+#define CAPTURY_NECK_FLEXION_EXTENSION			35
+#define CAPTURY_NECK_ROTATION				36
+#define CAPTURY_NECK_LATERAL_BENDING			37
+#define CAPTURY_CENTER_OF_GRAVITY_X			38
+#define CAPTURY_CENTER_OF_GRAVITY_Y			39
+#define CAPTURY_CENTER_OF_GRAVITY_Z			40
+#define CAPTURY_HEAD_ROTATION				41
+#define CAPTURY_TORSO_ROTATION				42
+#define CAPTURY_TORSO_INCLINATION			43
+#define CAPTURY_HEAD_INCLINATION			44
+#define CAPTURY_TORSO_FLEXION				45
 
 
 
@@ -121,6 +138,21 @@ typedef void (*CapturyNewPoseCallback)(CapturyActor*, CapturyPose*, int tracking
 // try to be quick in the callback
 // returns 1 if successful otherwise 0
 CAPTURY_DLL_EXPORT int Captury_registerNewPoseCallback(CapturyNewPoseCallback callback);
+
+#pragma pack(push, 1)
+struct CapturyAngleData {
+	uint16_t	type;
+	float		value;
+};
+#pragma pack(pop)
+
+typedef void (*CapturyNewAnglesCallback)(const CapturyActor*, int numAngles, struct CapturyAngleData* values);
+
+// register callback that will be called when new physiological angle data is received
+// the callback will be run in a different thread than the main application
+// try to be quick in the callback
+// returns 1 if successful otherwise 0
+CAPTURY_DLL_EXPORT int Captury_registerNewAnglesCallback(CapturyNewAnglesCallback callback);
 
 typedef enum { ACTOR_SCALING = 0, ACTOR_TRACKING = 1, ACTOR_STOPPED = 2, ACTOR_DELETED = 3, ACTOR_UNKNOWN = 4 } CapturyActorStatus;
 extern const char* CapturyActorStatusString[];
@@ -575,10 +607,7 @@ struct CapturyAnglesPacket {
 	int32_t		actor;
 	uint64_t	timestamp;
 	uint16_t	numAngles;
-	struct AngleData {
-		uint16_t	angle;
-		float		value;
-	} angles[];
+	CapturyAngleData angles[];
 };
 
 // sent to server
