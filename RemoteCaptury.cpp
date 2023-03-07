@@ -25,6 +25,7 @@
 #define NTDDI_WIN7SP1 0
 #define snprintf _snprintf
 #include <winsock2.h>
+#include <sysinfoapi.h>
 #pragma comment(lib, "ws2_32.lib")
 #ifndef PRIu64
   #define PRIu64 "I64u"
@@ -100,6 +101,7 @@ static MutexStruct syncMutex;
 static MutexStruct logMutex;
 // static pthread_mutex_t	mutex = PTHREAD_MUTEX_INITIALIZER;
 #endif
+static bool syncLoopIsRunning = false;
 
 static std::string currentDay;
 static std::string currentSession;
@@ -225,6 +227,8 @@ static int					backgroundQuality = -1;
 static CapturyBackgroundFinishedCallback	backgroundFinishedCallback = NULL;
 static void*					backgroundFinishedCallbackUserData = NULL;
 
+static int64_t				startRecordingTime = 0;
+
 static bool				doPrintf = true;
 static std::list<std::string>		logs;
 
@@ -233,13 +237,12 @@ static void log(const char *format, ...) __attribute__((format(printf,1,2)));
 #endif
 
 struct Sync {
-	double localOffset;
 	double offset;
 	double factor;
 
-	Sync(double lo, double o, double f) : localOffset(lo), offset(o), factor(f) {}
+	Sync(double o, double f) : offset(o), factor(f) {}
 
-	uint64_t getRemoteTime(uint64_t localT)	{ return uint64_t((localT - localOffset) * factor + offset); }
+	uint64_t getRemoteTime(uint64_t localT)	{ return uint64_t((localT) * factor + offset); }
 };
 
 struct SyncSample {
@@ -458,13 +461,13 @@ const char* Captury_getHumanReadableMessageType(CapturyPacketTypes type)
 	return "<unknown message type>";
 }
 
-#ifdef WIN32
+#ifdef SYSTEM_INFO
 // thanks https://www.frenk.com/2009/12/convert-filetime-to-unix-timestamp/
 // A UNIX timestamp contains the number of seconds from Jan 1, 1970, while the FILETIME documentation says:
 // Contains a 64-bit value representing the number of 100-nanosecond intervals since January 1, 1601 (UTC).
 //
 // Between Jan 1, 1601 and Jan 1, 1970 there are 11644473600 seconds, so we will just subtract that value:
-uint64_t convertFileTimeToTimestamp(FILETIME& ft)
+static uint64_t convertFileTimeToTimestamp(FILETIME& ft)
 {
 	// takes the last modified date
 	LARGE_INTEGER date, adjust;
@@ -549,12 +552,10 @@ void computeSync(Sync& s)
 	medianOffset = (num % 2 == 0) ? (offsets[num/2] + offsets[num/2+1]) * 0.5 : offsets[num/2];
 
 	if (num < 10 || (syncSamples.back().localT - syncSamples.front().localT) < 1000000) { // not enough samples
-		s.localOffset = 0.0;
 		s.offset = medianOffset;
 		s.factor = 1.0;
 		log("sync based on %d samples: offset %g\n", num, s.offset);
 	} else {
-		s.localOffset = 0.0;
 		s.offset = medianOffset;
 		s.factor = 0.0;
 		meanLocalT /= num;
@@ -568,18 +569,18 @@ void computeSync(Sync& s)
 		s.factor /= sumAsqr;
 		s.offset -= meanLocalT * s.factor;
 		s.factor += 1.0;
-		log("sync based on %d samples: offset %15f, factor %.15f (mlt %15f, moff %15f)\n", num, s.offset, s.factor, meanLocalT, meanOffset);
+		log("sync based on %d samples: offset %15f, factor %.15f (mlt %15f, moff %15f)\n", num, s.offset, s.factor, meanLocalT, medianOffset);
 	}
 }
 
-static Sync oldSync GUARDED_BY(syncMutex) = Sync(0.0, 0.0, 1.0);
-static Sync currentSync GUARDED_BY(syncMutex) = Sync(0.0, 0.0, 1.0);
+static Sync oldSync GUARDED_BY(syncMutex) = Sync(0.0, 1.0);
+static Sync currentSync GUARDED_BY(syncMutex) = Sync(0.0, 1.0);
 static uint64_t transitionStartLocalT GUARDED_BY(syncMutex) = 0;
 static uint64_t transitionEndLocalT GUARDED_BY(syncMutex) = 0;
 static void updateSync(uint64_t localT)
 {
 	constexpr uint64_t defaultTransitionTime = 100000; // 0.1 second
-	Sync tempSync(0.0, 0.0, 1.0);
+	Sync tempSync(0.0, 1.0);
 	computeSync(tempSync);
 
 	lockMutex(&syncMutex);
@@ -591,7 +592,6 @@ static void updateSync(uint64_t localT)
 	double transitionStartRemoteT = (double)currentSync.getRemoteTime(localT);
 
 	currentSync = tempSync;
-	oldSync.localOffset = (double)localT;
 	oldSync.offset = transitionStartRemoteT;
 	oldSync.factor = currentSync.factor;
 
@@ -904,7 +904,7 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 			// we assume that the network transfer time is symmetric
 			// so the timestamp given in the packet was captured at (pingTime + pongTime) / 2
 			uint64_t t = (pongTime - pingTime) / 2 + pingTime;
-			syncSamples.emplace_back(t, tp->timestamp, pongTime - pingTime);
+			syncSamples.emplace_back(t, tp->timestamp, (uint32_t)(pongTime - pingTime));
 			if (syncSamples.size() > 50)
 				syncSamples.erase(syncSamples.begin());
 			updateSync(t);
@@ -976,6 +976,10 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 		case capturyStatus: {
 			CapturyStatusPacket* sp = (CapturyStatusPacket*)&buf[0];
 			lastStatusMessage = sp->message; // FIXME this is unsafe. assumes that message is 0 terminated.
+			break; }
+		case capturyStartRecordingAck2: {
+			CapturyTimePacket* srp = (CapturyTimePacket*)&buf[0];
+			startRecordingTime = srp->timestamp;
 			break; }
 		case capturyStreamAck:
 		case capturySetShotAck:
@@ -2268,19 +2272,21 @@ extern "C" int Captury_setShotName(const char* name)
 
 // you have to set the shot name before starting to record - or make sure that it has been set using CapturyLive
 // returns 1 if successful, 0 otherwise
-extern "C" int Captury_startRecording()
+extern "C" int64_t Captury_startRecording()
 {
 	if (sock == -1)
 		return 0;
 
 	CapturyRequestPacket packet;
-	packet.type = capturyStartRecording;
+	packet.type = capturyStartRecording2;
 	packet.size = sizeof(packet);
 
-	if (!sendPacket(&packet, capturyStartRecordingAck))
+	startRecordingTime = 0;
+
+	if (!sendPacket(&packet, capturyStartRecordingAck2))
 		return 0;
 
-	return 1;
+	return startRecordingTime;
 }
 
 // returns 1 if successful, 0 otherwise
@@ -2326,11 +2332,16 @@ static void* syncLoop(void* arg)
 
 extern "C" void Captury_startTimeSynchronizationLoop()
 {
+	if (syncLoopIsRunning)
+		return;
+
 #ifdef WIN32
 	syncThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)syncLoop, NULL, 0, NULL);
 #else
 	pthread_create(&syncThread, NULL, syncLoop, NULL);
 #endif
+
+	syncLoopIsRunning = true;
 }
 
 extern "C" uint64_t Captury_synchronizeTime()
@@ -2351,8 +2362,10 @@ extern "C" uint64_t Captury_synchronizeTime()
 
 extern "C" int64_t Captury_getTimeOffset()
 {
-	int64_t now = getTime();
-	return Captury_getTime() - now;
+	lockMutex(&syncMutex);
+	int64_t offset = currentSync.offset;
+	unlockMutex(&syncMutex);
+	return offset;
 }
 
 extern "C" int Captury_setHalfplaneConstraint(int actorId, int jointIndex, float* originOffset, float* normal, float offset, uint64_t timestamp, float weight)

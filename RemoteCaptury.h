@@ -304,8 +304,8 @@ CAPTURY_DLL_EXPORT int Captury_getCurrentDaySessionShot(const char** day, const 
 CAPTURY_DLL_EXPORT int Captury_setShotName(const char* name);
 
 // you have to set the shot name before starting to record - or make sure that it has been set using CapturyLive
-// returns 1 if successful, 0 otherwise
-CAPTURY_DLL_EXPORT int Captury_startRecording();
+// returns the timestamp when recording starts (on the CapturyLive machine) if successful, 0 otherwise
+CAPTURY_DLL_EXPORT int64_t Captury_startRecording();
 
 // returns 1 if successful, 0 otherwise
 CAPTURY_DLL_EXPORT int Captury_stopRecording();
@@ -341,6 +341,7 @@ CAPTURY_DLL_EXPORT int Captury_getBackgroundQuality();
 
 CAPTURY_DLL_EXPORT const char* Captury_getStatus(); // do not free.
 
+CAPTURY_DLL_EXPORT void Captury_enablePrintf(int on); // 0 to turn off
 CAPTURY_DLL_EXPORT const char* Captury_getNextLogMessage(); // do free.
 
 //
@@ -382,6 +383,7 @@ typedef enum { capturyActors = 1, capturyActor = 2,
 	       capturyCompressedPoseCont = 67,
 	       capturyGetTime2 = 68, capturyTime2 = 69,
 	       capturyAngles = 70,
+	       capturyStartRecording2 = 71, capturyStartRecordingAck2 = 72,
 	       capturyError = 0 } CapturyPacketTypes;
 
 // returns a string for nicer error messages
@@ -604,7 +606,7 @@ struct CapturyConstraintPacket {
 // sent to client
 // as a reply to capturyGetTime
 struct CapturyTimePacket {
-	int32_t		type;	// capturyTime
+	int32_t		type;	// capturyTime, capturyStartRecordingAck2
 	int32_t		size;
 
 	uint64_t	timestamp;
