@@ -2354,8 +2354,13 @@ extern "C" uint64_t Captury_synchronizeTime()
 
 	pingTime = getTime();
 
-	if (!sendPacket((CapturyRequestPacket*)&packet, capturyTime2, 1))
-		return 0;
+	if (!sendPacket((CapturyRequestPacket*)&packet, capturyTime2, 1)) {
+		CapturyRequestPacket req;
+		req.type = capturyGetTime;
+		req.size = sizeof(req);
+		if (!sendPacket((CapturyRequestPacket*)&req, capturyTime, 1))
+			return 0;
+	}
 
 	return Captury_getTime();
 }
