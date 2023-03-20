@@ -1014,7 +1014,7 @@ static void receivedPose(CapturyPose* pose, int actorId, ActorData* aData, uint6
 	pose->timestamp = timestamp;
 
 	uint64_t now = getTime();
-	log("received pose %ld at %ld, diff %ld\n", pose->timestamp, now, now - aData->lastPoseTimestamp);
+	// log("received pose %ld at %ld, diff %ld\n", pose->timestamp, now, now - aData->lastPoseTimestamp);
 	aData->lastPoseTimestamp = now;
 
 	mostRecentPoseReceivedTime = getRemoteTime(now);
