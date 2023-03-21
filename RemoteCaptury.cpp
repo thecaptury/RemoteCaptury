@@ -443,6 +443,12 @@ const char* Captury_getHumanReadableMessageType(CapturyPacketTypes type)
 		return "<get time2>";
 	case capturyTime2:
 		return "<time2>";
+	case capturyAngles:
+		return "<angles>";
+	case capturyStartRecording2:
+		return "<start recording 2>";
+	case capturyStartRecordingAck2:
+		return "<start recording ack 2>";
 	case capturyError:
 		return "<error>";
 	}
@@ -1014,7 +1020,7 @@ static void receivedPose(CapturyPose* pose, int actorId, ActorData* aData, uint6
 	pose->timestamp = timestamp;
 
 	uint64_t now = getTime();
-	log("received pose %ld at %ld, diff %ld\n", pose->timestamp, now, now - aData->lastPoseTimestamp);
+	// log("received pose %ld at %ld, diff %ld\n", pose->timestamp, now, now - aData->lastPoseTimestamp);
 	aData->lastPoseTimestamp = now;
 
 	mostRecentPoseReceivedTime = getRemoteTime(now);
