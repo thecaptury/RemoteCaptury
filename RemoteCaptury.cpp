@@ -535,7 +535,7 @@ void computeSync(Sync& s)
 
 	int64_t offsets[50];
 
-	int num = syncSamples.size();
+	int num = (int)syncSamples.size();
 	for (int i = 0; i < num; ++i) {
 		SyncSample& ss = syncSamples[i];
 		offsets[i] = ss.remoteT - ss.localT; // alternatively use median here
@@ -2369,7 +2369,7 @@ extern "C" uint64_t Captury_synchronizeTime()
 extern "C" int64_t Captury_getTimeOffset()
 {
 	lockMutex(&syncMutex);
-	int64_t offset = currentSync.offset;
+	int64_t offset = (int64_t)currentSync.offset;
 	unlockMutex(&syncMutex);
 	return offset;
 }
