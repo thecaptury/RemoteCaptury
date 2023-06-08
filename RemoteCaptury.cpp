@@ -1151,21 +1151,21 @@ static void* streamLoop(void* arg)
 	SOCKET streamSock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 	if (streamSock == -1) {
 		log("failed to create stream socket\n");
-		delete packet;
+		free(packet);
 		return 0;
 	}
 
 	if (bind(streamSock, (sockaddr*) &localStreamAddress, sizeof(localStreamAddress)) != 0) {
 		closesocket(streamSock);
 		log("failed to bind stream socket\n");
-		delete packet;
+		free(packet);
 		return 0;
 	}
 
 	if (connect(streamSock, (sockaddr*) &remoteAddress, sizeof(remoteAddress)) != 0) {
 		closesocket(streamSock);
 		log("failed to connect stream socket\n");
-		delete packet;
+		free(packet);
 		return 0;
 	}
 
@@ -1205,7 +1205,7 @@ static void* streamLoop(void* arg)
 
 	if (!received) {
 		lastErrorMessage = "Failed to start streaming";
-		delete packet;
+		free(packet);
 		return 0;
 	}
 
@@ -1608,7 +1608,7 @@ static void* streamLoop(void* arg)
 
 	log("closing streaming thread\n");
 
-	delete packet;
+	free(packet);
 
 	return 0;
 }
