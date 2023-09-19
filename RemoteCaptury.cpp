@@ -1114,17 +1114,17 @@ static void decompressPose(const float* values, float* copyTo, uint8_t* v, int n
 			int32_t t = v[0] | (v[1] << 8);
 			if ((t & 0x8000) != 0)
 				t |= 0xFFFF0000;
-			copyTo[0] = t * 0.0625f + values[actor->joints[i].parent*6];
+			copyTo[0] = t * 0.0625f + values[actor->joints[i].parent*9];
 			v += 2;
 			t = v[0] | (v[1] << 8);
 			if ((t & 0x8000) != 0)
 				t |= 0xFFFF0000;
-			copyTo[1] = t * 0.0625f + values[actor->joints[i].parent*6+1];
+			copyTo[1] = t * 0.0625f + values[actor->joints[i].parent*9+1];
 			v += 2;
 			t = v[0] | (v[1] << 8);
 			if ((t & 0x8000) != 0)
 				t |= 0xFFFF0000;
-			copyTo[2] = t * 0.0625f + values[actor->joints[i].parent*6+2];
+			copyTo[2] = t * 0.0625f + values[actor->joints[i].parent*9+2];
 			v += 2;
 		}
 
@@ -1134,7 +1134,10 @@ static void decompressPose(const float* values, float* copyTo, uint8_t* v, int n
 		copyTo[3] = ((rall & 0x000007FF))       * (360.0f / 2047) - 180.0f;
 		copyTo[4] = ((rall & 0x003FF800) >> 11) * (360.0f / 2047) - 180.0f;
 		copyTo[5] = ((rall & 0xFFC00000) >> 22) * (180.0f / 1023);
-		copyTo += 6;
+		copyTo[6] = 1.0f;
+		copyTo[7] = 1.0f;
+		copyTo[8] = 1.0f;
+		copyTo += 9;
 	}
 }
 
@@ -1469,9 +1472,16 @@ static void* streamLoop(void* arg)
 				continue;
 			}
 
-			if (cpp->type == capturyPoseCont)
-				memcpy(((char*)aData.inProgress[inProgressIndex].pose) + aData.inProgress[inProgressIndex].bytesDone, cpc->values, numBytesToCopy);
-			else
+			if (cpp->type == capturyPoseCont) {
+				char* at = ((char*)aData.inProgress[inProgressIndex].pose) + aData.inProgress[inProgressIndex].bytesDone / 6 * sizeof(CapturyTransform);
+				int numFloatsToCopy = numBytesToCopy / sizeof(float);
+				for (int i = 0; i < numBytesToCopy; i += 6, at += sizeof(CapturyTransform)) {
+					memcpy(at, cpc->values + i, 6*sizeof(float));
+					cpc->values[i + 6 + 0] = 1.0f;
+					cpc->values[i + 6 + 1] = 1.0f;
+					cpc->values[i + 6 + 2] = 1.0f;
+				}
+			} else
 				decompressPose(aData.inProgress[inProgressIndex].pose, (float*)(((char*)aData.inProgress[inProgressIndex].pose) + aData.inProgress[inProgressIndex].bytesDone), (uint8_t*)cpc->values, numBytesToCopy / 10, actorsById[cpp->actor], false);
 			aData.inProgress[inProgressIndex].bytesDone += numBytesToCopy;
 			if (aData.inProgress[inProgressIndex].bytesDone == totalBytes) {
@@ -1571,9 +1581,14 @@ static void* streamLoop(void* arg)
 			lockMutex(&mutex);
 		}
 
-		if (cpp->type == capturyPose || cpp->type == capturyPose2)
-			memcpy(copyTo, values, numBytesToCopy);
-		else // compressed
+		if (cpp->type == capturyPose || cpp->type == capturyPose2) {
+			for (int i = 0; i < numBytesToCopy; i += 6 * sizeof(float), copyTo += 9, values += 6) {
+				memcpy(copyTo, values, 6 * sizeof(float));
+				copyTo[6 + 0] = 1.0f;
+				copyTo[6 + 1] = 1.0f;
+				copyTo[6 + 2] = 1.0f;
+			}
+		} else // compressed
 			decompressPose(copyTo, copyTo, (uint8_t*)values, numValues / 6, actorsById[cpp->actor], true);
 
 		if (numBytesToCopy == numValues * (int)sizeof(float))
@@ -1975,7 +1990,7 @@ extern "C" int Captury_stopStreaming()
 }
 
 // fills the pose with the current pose for the given actor
-// the client is responsible for providing sufficient space (actor->numJoints*6) in pose->values
+// the client is responsible for providing sufficient space (actor->numJoints*9) in pose->values
 // returns 1 if successful, 0 otherwise
 extern "C" CapturyPose* Captury_getCurrentPoseForActor(int actorId)
 {
@@ -2029,13 +2044,13 @@ extern "C" CapturyPose* Captury_getCurrentPoseAndTrackingConsistencyForActor(int
 		return NULL;
 	}
 
-	CapturyPose* pose = (CapturyPose*)malloc(sizeof(CapturyPose) + it->second.currentPose.numTransforms * sizeof(float) * 6);
+	CapturyPose* pose = (CapturyPose*)malloc(sizeof(CapturyPose) + it->second.currentPose.numTransforms * sizeof(CapturyTransform));
 	pose->actor = actorId;
 	pose->timestamp = it->second.currentPose.timestamp;
 	pose->numTransforms = it->second.currentPose.numTransforms;
 	pose->transforms = (CapturyTransform*)&pose[1];
 
-	memcpy(pose->transforms, it->second.currentPose.transforms, sizeof(float) * pose->numTransforms*6);
+	memcpy(pose->transforms, it->second.currentPose.transforms, sizeof(CapturyTransform) * pose->numTransforms);
 	unlockMutex(&mutex);
 
 	return pose;
