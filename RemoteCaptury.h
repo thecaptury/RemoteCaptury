@@ -104,6 +104,8 @@ CAPTURY_DLL_EXPORT int Captury_getCameras(const CapturyCamera** cameras);
 #define CAPTURY_STREAM_FOOT_CONTACT	0x0080
 #define CAPTURY_STREAM_COMPRESSED	0x0100
 #define CAPTURY_STREAM_ANGLES		0x0200
+#define CAPTURY_STREAM_SCALES		0x0400
+#define CAPTURY_STREAM_BLENDSHAPES	0x0800
 
 // returns 1 if successful, 0 otherwise
 CAPTURY_DLL_EXPORT int Captury_startStreaming(int what);
@@ -463,7 +465,7 @@ struct CapturyJointPacket3 {
 	int32_t		parent;
 	float		offset[3];
 	float		orientation[3];
-	float		scale[3];
+	float		scale[3];	// if scale[0] == -1: this is a blend shape
 	char		name[];		// zero terminated joint name
 };
 
@@ -543,6 +545,33 @@ struct CapturyStreamPacket1 {
 	uint16_t	angles[];
 };
 
+// sent to server
+struct CapturyStreamPacketTcp {
+	int32_t		type;		// capturyStream
+	int32_t		size;		// size of full message including type and size
+
+	int32_t		what;		// CAPTURY_STREAM_POSES or CAPTURY_STREAM_NOTHING
+	int32_t		cameraId;	// valid if what & CAPTURY_STREAM_IMAGES
+
+	uint32_t	ip;		// where to stream to
+	uint16_t	port;
+};
+
+// sent to server
+struct CapturyStreamPacket1Tcp {
+	int32_t		type;		// capturyStream
+	int32_t		size;		// size of full message including type and size
+
+	int32_t		what;		// CAPTURY_STREAM_POSES or CAPTURY_STREAM_NOTHING
+	int32_t		cameraId;	// valid if what & CAPTURY_STREAM_IMAGES
+
+	uint32_t	ip;		// where to stream to
+	uint16_t	port;
+
+	uint16_t	numAngles;
+	uint16_t	angles[];
+};
+
 // sent to client
 // as a reply to CapturyRequestPacket = capturyDaySessionShot
 struct CapturyDaySessionShotPacket {
@@ -570,7 +599,7 @@ struct CapturyPosePacket {
 
 	int32_t		actor;
 	uint64_t	timestamp;
-	int32_t		numValues; // multiple of 6
+	int32_t		numValues; // 6 * numJoints + numBlendShapes + (numJoints if scale is enabled)
 	float		values[];
 };
 
@@ -586,7 +615,7 @@ struct CapturyPosePacket2 {
 	uint8_t		scalingProgress; // [0 .. 100]
 	uint8_t		flags;     // CAPTURY_LEFT_FOOT_ON_GROUND | CAPTURY_RIGHT_FOOT_ON_GROUND
 	uint8_t		reserved;  // 0 for now
-	int32_t		numValues; // multiple of 6
+	int32_t		numValues; // 6 * numJoints + numBlendShapes + (numJoints if scale is enabled)
 	float		values[];
 };
 

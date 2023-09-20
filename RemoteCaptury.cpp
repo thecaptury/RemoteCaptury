@@ -61,10 +61,11 @@ typedef uint32_t uint;
 #define REQUIRES(...)		THREAD_ANNOTATION_ATTRIBUTE__(requires_capability(__VA_ARGS__))
 #define ACQUIRE(...)		THREAD_ANNOTATION_ATTRIBUTE__(acquire_capability(__VA_ARGS__))
 #define RELEASE(...)		THREAD_ANNOTATION_ATTRIBUTE__(release_capability(__VA_ARGS__))
-
-
+// #pragma clang optimize off
+// #pragma GCC optimize("O0")
 #ifdef WIN32
 static HANDLE		thread;
+static HANDLE		receiveThread;
 static HANDLE		syncThread;
 static CRITICAL_SECTION	mutex;
 static CRITICAL_SECTION	partialActorMutex;
@@ -75,6 +76,7 @@ static CRITICAL_SECTION logMutex;
 #define SOCKET		int
 #define closesocket	close
 static pthread_t	thread;
+static pthread_t	receiveThread;
 static pthread_t	syncThread;
 struct CAPABILITY("mutex") MutexStruct {
 	pthread_mutex_t	m;
@@ -89,6 +91,10 @@ static MutexStruct logMutex;
 // static pthread_mutex_t	mutex = PTHREAD_MUTEX_INITIALIZER;
 #endif
 static bool syncLoopIsRunning = false;
+
+static int streamWhat;
+static int32_t streamCamera;
+static std::vector<uint16_t> streamAngles;
 
 static std::string currentDay;
 static std::string currentSession;
@@ -188,7 +194,7 @@ static std::map<ActorAndJoint, MarkerTransform> markerTransforms;
 
 // error message
 static std::string lastErrorMessage;
-static std::string lastStatusMessage;
+static std::string lastStatusMessage = "disconnected";
 
 static bool getLocalPoses = false;
 
@@ -202,6 +208,7 @@ static bool		isThreadRunning = false;
 static SOCKET		sock = -1;
 
 static volatile int	stopStreamThread = 0; // stop streaming thread
+static volatile int	stopReceiving = 0; // stop receiving thread
 
 static sockaddr_in	localAddress; // local address
 static sockaddr_in	localStreamAddress; // local address for streaming socket
@@ -618,32 +625,60 @@ extern "C" uint64_t Captury_getTime()
 	return getRemoteTime(getTime());
 }
 
+static SOCKET openTcpSocket()
+{
+	log("opening TCP socket\n");
+
+	SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	if (sock == -1)
+		return -1;
+
+	if (localAddress.sin_port != 0 && bind(sock, (sockaddr*) &localAddress, sizeof(localAddress)) != 0) {
+		closesocket(sock);
+		return -1;
+	}
+
+	if (connect(sock, (sockaddr*) &remoteAddress, sizeof(remoteAddress)) != 0) {
+		closesocket(sock);
+		return -1;
+	}
+
+	// set read timeout
+	struct timeval tv;
+	tv.tv_sec = 0;  /* 100 milliseconds Timeout */
+	tv.tv_usec = 100000;
+	setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (char *)&tv, sizeof(struct timeval));
+
+#ifndef WIN32
+	char buf[100];
+	log("connected to %s:%d\n", inet_ntop(AF_INET, &remoteAddress.sin_addr, buf, 100), ntohs(remoteAddress.sin_port));
+#endif
+
+	return sock;
+}
+
 // waits for at most 30ms before it fails
 // returns false if the expected packet is not received
-static bool receive(SOCKET sok, CapturyPacketTypes expect)
+static bool receive(SOCKET& sok)
 {
-	int numRetries = 3;
-	int packetsMissing = 1;
-
 	char buf[9000];
 	CapturyRequestPacket* p = (CapturyRequestPacket*) &buf[0];
 
-	for (int n = 0; n < numRetries; ++n) {
+	{
 		fd_set reader;
 		FD_ZERO(&reader);
 		FD_SET(sok, &reader);
 
 		struct timeval tv;
 		tv.tv_sec = 0;
-		tv.tv_usec = 20000; // 20ms should be enough
+		tv.tv_usec = 30000; // 30ms should be enough
 		int ret = select((int)(sok+1), &reader, NULL, NULL, &tv);
 		if (ret == -1) { // error
-			log("error waiting for socket waiting for packet type %s\n", Captury_getHumanReadableMessageType(expect));
-			return 0;
+			log("error waiting for socket\n");
+			return false;
 		}
 		if (ret == 0) {
-			log("timeout waiting for packet type %s\n", Captury_getHumanReadableMessageType(expect));
-			continue;
+			return true;
 		}
 
 		{
@@ -660,15 +695,30 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 		}
 
 		// first peek to find out which packet type this is
-		int size = recv(sok, buf, sizeof(buf), 0);
+		int size = recv(sok, buf, sizeof(CapturyRequestPacket), 0);
 		if (size == 0) { // the other end shut down the socket...
 			log("socket shut down by other end\n");
-			return 0;
+			closesocket(sok);
+			sok = -1;
+			return false;
 		}
 		if (size == -1) { // error
 			log("socket error\n");
-			return 0;
+			return false;
 		}
+
+		size = recv(sok, buf+sizeof(CapturyRequestPacket), std::min<int>(p->size, sizeof(buf))-sizeof(CapturyRequestPacket), 0);
+		if (size == 0) { // the other end shut down the socket...
+			log("socket shut down by other end\n");
+			closesocket(sok);
+			sok = -1;
+			return false;
+		}
+		if (size == -1) { // error
+			log("socket error\n");
+			return false;
+		}
+		size += sizeof(CapturyRequestPacket);
 
 //		log("received packet size %d type %d (expected %d)\n", size, p->type, expect);
 
@@ -676,22 +726,22 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 		case capturyActors: {
 			CapturyActorsPacket* cap = (CapturyActorsPacket*)&buf[0];
 			log("expecting %d actor packets\n", cap->numActors);
-			if (expect == capturyActors) {
-				if (cap->numActors != 0) {
-					packetsMissing = cap->numActors;
-					expect = capturyActor;
-				}
-			}
-			numRetries += packetsMissing;
+			// if (expect == capturyActors) {
+			// 	if (cap->numActors != 0) {
+			// 		packetsMissing = cap->numActors;
+			// 		expect = capturyActor;
+			// 	}
+			// }
+			// numRetries += packetsMissing;
 			break; }
 		case capturyCameras: {
 			CapturyCamerasPacket* ccp = (CapturyCamerasPacket*)&buf[0];
 			numCameras = ccp->numCameras;
-			if (expect == capturyCameras) {
-				packetsMissing = numCameras;
-				expect = capturyCamera;
-			}
-			numRetries += packetsMissing;
+			// if (expect == capturyCameras) {
+			// 	packetsMissing = numCameras;
+			// 	expect = capturyCamera;
+			// }
+			// numRetries += packetsMissing;
 			break; }
 		case capturyActor:
 		case capturyActor2:
@@ -763,10 +813,10 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 				}
 			}
 			if (numTransmittedJoints < actor.numJoints) {
-				expect = (version == 1) ? capturyActorContinued : (version == 2) ? capturyActorContinued2 : capturyActorContinued3;
-				numRetries += 1;
+				// expect = (version == 1) ? capturyActorContinued : (version == 2) ? capturyActorContinued2 : capturyActorContinued3;
+				// numRetries += 1;
 			}
-			//log("received actor %d (%d/%d), missing %d\n", actor.id, numTransmittedJoints, actor.numJoints, packetsMissing);
+			log("received actor %x (%d/%d)\n", actor.id, numTransmittedJoints, actor.numJoints);
 			p->type = capturyActor;
 			if (numTransmittedJoints == actor.numJoints) {
 				//log("received fulll actor %d\n", actor.id);
@@ -843,10 +893,10 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 					partialActors.erase(partialActors.begin() + i);
 				} else {
 					// expect is already set correctly
-					numRetries += 1;
-					packetsMissing += 1;
+					// numRetries += 1;
+					// packetsMissing += 1;
 				}
-				// log("received actor cont %d (%d/%d), missing %d\n", actor.id, j, actor.numJoints, packetsMissing);
+				log("received actor cont %d (%d/%d)\n", actor.id, j, actor.numJoints);
 				break;
 			}
 			unlockMutex(&partialActorMutex);
@@ -983,33 +1033,62 @@ static bool receive(SOCKET sok, CapturyPacketTypes expect)
 			break; // all good
 		}
 
-		if (p->type == expect) {
-			--packetsMissing;
+		// if (p->type == expect) {
+		// 	--packetsMissing;
 
-			if (packetsMissing == 0)
-				break;
-		}
+		// 	if (packetsMissing == 0)
+		// 		break;
+		// }
 	}
 
-	return (packetsMissing == 0);
+	return true;
 }
 
-static bool sendPacket(CapturyRequestPacket* packet, CapturyPacketTypes expectedReplyType, int numRetries = 3)
+#ifdef WIN32
+static DWORD WINAPI receiveLoop(void* arg)
+#else
+static void* receiveLoop(void* arg)
+#endif
 {
-	bool received = false;
-	for (int i = 0; i < numRetries; ++i) {
-		if (send(sock, (const char*)packet, packet->size, 0) != packet->size)
-			continue;
+	log("starting receive loop\n");
+	while (!stopReceiving) {
+		if (!receive(sock)) {
+			if (sock == -1) {
+				if (isThreadRunning) {
+					stopStreamThread = 1;
 
-		if (expectedReplyType == capturyError)
-			break;
-		if (receive(sock, expectedReplyType)) {
-			received = true;
-			break;
+					#ifdef WIN32
+					WaitForSingleObject(thread, 1000);
+					#else
+					void* retVal;
+					pthread_join(thread, &retVal);
+					#endif
+				}
+
+				while (!stopReceiving) {
+					sock = openTcpSocket();
+					if (sock != -1)
+						break;
+
+					usleep(1000000);
+				}
+
+				if (streamWhat != CAPTURY_STREAM_NOTHING)
+					Captury_startStreamingImagesAndAngles(streamWhat, streamCamera, streamAngles.size(), streamAngles.data());
+			}
 		}
 	}
+	log("stopping receive loop\n");
 
-	return received;
+	return 0;
+}
+
+static bool sendPacket(CapturyRequestPacket* packet, CapturyPacketTypes expectedReplyType)
+{
+	if (send(sock, (const char*)packet, packet->size, 0) != packet->size)
+		return false;
+
+	return true;
 }
 
 static void receivedPose(CapturyPose* pose, int actorId, ActorData* aData, uint64_t timestamp) REQUIRES(mutex)
@@ -1149,12 +1228,12 @@ static void* streamLoop(void* arg)
 {
 	isThreadRunning = true;
 
-	CapturyStreamPacket* packet = (CapturyStreamPacket*)arg;
+	CapturyStreamPacketTcp* packet = (CapturyStreamPacketTcp*)arg;
 
 	SOCKET streamSock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 	if (streamSock == -1) {
 		log("failed to create stream socket\n");
-		free(packet);
+free(packet);
 		return 0;
 	}
 
@@ -1178,8 +1257,8 @@ static void* streamLoop(void* arg)
 	tv.tv_usec = 100000;
 	setsockopt(streamSock, SOL_SOCKET, SO_RCVTIMEO, (char *)&tv, sizeof(struct timeval));
 
+	struct sockaddr_in thisEnd;
 	{
-		struct sockaddr_in thisEnd;
 		socklen_t len = sizeof(thisEnd);
 		getsockname(streamSock, (sockaddr*) &thisEnd, &len);
 		streamSocketPort = thisEnd.sin_port;
@@ -1192,43 +1271,28 @@ static void* streamLoop(void* arg)
 		#endif
 	}
 
+	packet->ip = thisEnd.sin_addr.s_addr;
+	packet->port = thisEnd.sin_port;
+
 	//	log("stream packet has size %d\n", packet->size);
 
-	// resend request 3 times
-	bool received = false;
-	for (int i = 0; i < 3; ++i) {
-		if (send(streamSock, (const char*)packet, packet->size, 0) != packet->size)
-			continue;
-
-		if (receive(streamSock, capturyStreamAck)) {
-			received = true;
-			break;
-		}
-	}
-
-	if (!received) {
+	// send request on TCP socket
+	if (send(sock, (const char*)packet, packet->size, 0) != packet->size) {
 		lastErrorMessage = "Failed to start streaming";
-		free(packet);
 		return 0;
 	}
 
-	time_t lastHeartbeat = time(NULL);
-
-	do {
+	while (!stopStreamThread) {
 		fd_set reader;
 		FD_ZERO(&reader);
 		FD_SET(streamSock, &reader);
+		FD_SET(sock, &reader);
 
 		// keep the streaming alive
-		time_t t = time(NULL);
-		if (t > lastHeartbeat + 1) {
-			send(streamSock, (const char*)packet, packet->size, 0);
-			lastHeartbeat = time(nullptr);
-		}
 
 		tv.tv_sec = 0;
 		tv.tv_usec = 500000; // 0.5s = 2Hz
-		int ret = select((int)(streamSock+1), &reader, NULL, NULL, &tv);
+		int ret = select((int)(std::max(sock, streamSock)+1), &reader, NULL, NULL, &tv);
 		if (ret == -1) { // error
 			log("error waiting for stream socket\n");
 			lastErrorMessage = "Error waiting for stream socket";
@@ -1253,6 +1317,8 @@ static void* streamLoop(void* arg)
 			continue;
 		}
 		if (size == -1) { // error
+			if (errno == EAGAIN)
+				continue;
 			char buff[200];
 			#ifdef WIN32
 			sprintf(buff, "Stream socket error: %d", WSAGetLastError());
@@ -1260,15 +1326,11 @@ static void* streamLoop(void* arg)
 			sprintf(buff, "Stream socket error: %s", strerror(errno));
 			#endif
 			lastErrorMessage = buff;
+			log("streaming error: %s\n", buff);
 			break;
 		}
 
 		dataReceivedTime = Captury_getTime(); // get remote time
-
-		if (cpp->type == capturyStreamAck) {
-			lastHeartbeat = time(nullptr);
-			continue;
-		}
 
 		if (cpp->type == capturyImageData) {
 			// received data for the image
@@ -1596,25 +1658,19 @@ static void* streamLoop(void* arg)
 
 		unlockMutex(&mutex);
 
-	} while (!stopStreamThread);
+	}
 
 	isThreadRunning = false;
 
-	CapturyStreamPacket pkt;
+	CapturyStreamPacketTcp pkt;
 	pkt.type = capturyStream;
 	pkt.size = sizeof(pkt);
 	pkt.what = CAPTURY_STREAM_NOTHING;
+	pkt.ip = thisEnd.sin_addr.s_addr;
+	pkt.port = thisEnd.sin_port;
 
-	for (int i = 0; i < 3; ++i) {
-		if (send(streamSock, (const char*)&pkt, pkt.size, 0) != sizeof(pkt)) {
-			log("failed sending stream nothing packet.\n");
-			continue;
-		}
-
-		if (receive(streamSock, capturyStreamAck)) {
-			log("successfully sent stream nothing packet.\n");
-			break;
-		}
+	if (send(sock, (const char*)&pkt, pkt.size, 0) != sizeof(pkt)) {
+		log("failed sending stream nothing packet.\n");
 	}
 
 	closesocket(streamSock);
@@ -1643,25 +1699,6 @@ extern "C" int Captury_connect2(const char* ip, unsigned short port, unsigned sh
 	InitializeCriticalSection(&logMutex);
 #endif
 
-	if (sock == -1) {
-		lockMutex(&mutex);
-		actors.reserve(32);
-		unlockMutex(&mutex);
-
-#ifdef WIN32
-		WSADATA init;
-		const int ret = WSAStartup(WINSOCK_VERSION, &init);
-#endif
-
-		sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-		if (sock == -1) {
-#ifdef WIN32
-			int err = WSAGetLastError();
-#endif
-			return 0;
-		}
-	}
-
 	struct in_addr addr;
 #ifdef WIN32
 	addr.S_un.S_addr = inet_addr(ip);
@@ -1678,31 +1715,28 @@ extern "C" int Captury_connect2(const char* ip, unsigned short port, unsigned sh
 	localStreamAddress.sin_addr.s_addr = htonl(INADDR_ANY);
 	localStreamAddress.sin_port = htons(localStreamPort);
 
-	if (localPort != 0 && bind(sock, (sockaddr*) &localAddress, sizeof(localAddress)) != 0) {
-		closesocket(sock);
-		sock = -1;
-		return 0;
-	}
-
 	remoteAddress.sin_family = AF_INET;
 	remoteAddress.sin_addr = addr;
 	remoteAddress.sin_port = htons(port);
 
-	if (connect(sock, (sockaddr*) &remoteAddress, sizeof(remoteAddress)) != 0) {
-		closesocket(sock);
-		sock = -1;
-		return 0;
+	if (sock == -1) {
+		lockMutex(&mutex);
+		actors.reserve(32);
+		unlockMutex(&mutex);
+
+#ifdef WIN32
+		WSADATA init;
+		const int ret = WSAStartup(WINSOCK_VERSION, &init);
+#endif
+
+		sock = openTcpSocket();
 	}
 
-	// set read timeout
-	struct timeval tv;
-	tv.tv_sec = 0;  /* 100 milliseconds Timeout */
-	tv.tv_usec = 100000;
-	setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (char *)&tv, sizeof(struct timeval));
-
-#ifndef WIN32
-	char buf[100];
-	log("connected to %s:%d\n", inet_ntop(AF_INET, &addr, buf, 100), port);
+	stopReceiving = 0;
+#ifdef WIN32
+	thread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)receiveLoop, nullptr, 0, NULL);
+#else
+	pthread_create(&thread, NULL, receiveLoop, nullptr);
 #endif
 
 	return 1;
@@ -1717,6 +1751,8 @@ extern "C" int Captury_disconnect()
 	closesocket(sock);
 
 	sock = -1;
+
+	stopReceiving = 1;
 
 	stopStreamThread = 1;
 
@@ -1771,12 +1807,12 @@ extern "C" int Captury_getActors(const CapturyActor** actrs)
 	if (sock == -1 || actrs == NULL)
 		return 0;
 
-	CapturyRequestPacket packet;
-	packet.type = capturyActors2;
-	packet.size = sizeof(packet);
+	// CapturyRequestPacket packet;
+	// packet.type = capturyActors2;
+	// packet.size = sizeof(packet);
 
-	if (!sendPacket(&packet, capturyActors))
-		return 0;
+	// if (!sendPacket(&packet, capturyActors))
+	// 	return 0;
 
 	lockMutex(&mutex);
 	// add those new actors that we haven't seen yet
@@ -1830,12 +1866,12 @@ extern "C" const CapturyActor* Captury_getActor(int id)
 	}
 	unlockMutex(&mutex);
 
-	CapturyRequestPacket packet;
-	packet.type = capturyActors2;
-	packet.size = sizeof(packet);
+	// CapturyRequestPacket packet;
+	// packet.type = capturyActors2;
+	// packet.size = sizeof(packet);
 
-	if (!sendPacket(&packet, capturyActors))
-		return NULL;
+	// if (!sendPacket(&packet, capturyActors))
+	// 	return NULL;
 
 	lockMutex(&mutex);
 	// clear list - we are getting a new one now.
@@ -1930,16 +1966,21 @@ extern "C" int Captury_startStreamingImagesAndAngles(int what, int32_t camId, in
 	if (sock == -1)
 		return 0;
 
+	log("start streaming %x, cam %d, %d angles\n", what, camId, numAngles);
+
 	if (what == CAPTURY_STREAM_NOTHING)
 		return Captury_stopStreaming();
 
-	if (isThreadRunning) {
+	if (isThreadRunning)
 		Captury_stopStreaming();
-	}
 
-	CapturyStreamPacket1* packet = (CapturyStreamPacket1*)malloc(sizeof(CapturyStreamPacket) + (numAngles ? (2 + numAngles * 2) : 0));
+	streamWhat = what;
+	streamCamera = camId;
+	streamAngles.resize(numAngles);
+	memcpy(streamAngles.data(), angles, sizeof(uint16_t) * numAngles);
+	CapturyStreamPacket1Tcp* packet = (CapturyStreamPacket1Tcp*)malloc(sizeof(CapturyStreamPacketTcp) + (numAngles ? (2 + numAngles * 2) : 0));
 	packet->type = capturyStream;
-	packet->size = sizeof(CapturyStreamPacket) + (numAngles ? (2 + numAngles * 2) : 0);
+	packet->size = sizeof(CapturyStreamPacketTcp) + (numAngles ? (2 + numAngles * 2) : 0);
 	if (camId != -1) // only stream images if a camera is specified
 		what |= CAPTURY_STREAM_IMAGES;
 	else
@@ -1985,6 +2026,8 @@ extern "C" int Captury_stopStreaming()
 	void* retVal;
 	pthread_join(thread, &retVal);
 #endif
+
+	streamWhat = CAPTURY_STREAM_NOTHING;
 
 	return 1;
 }
@@ -2336,7 +2379,7 @@ static void* syncLoop(void* arg)
 		packet.timeId = nextTimeId;
 
 		pingTime = getTime();
-		sendPacket((CapturyRequestPacket*)&packet, capturyTime2, 1);
+		sendPacket((CapturyRequestPacket*)&packet, capturyTime2);
 
 #ifdef WIN32
 		Sleep(1000);
@@ -2370,11 +2413,11 @@ extern "C" uint64_t Captury_synchronizeTime()
 
 	pingTime = getTime();
 
-	if (!sendPacket((CapturyRequestPacket*)&packet, capturyTime2, 1)) {
+	if (!sendPacket((CapturyRequestPacket*)&packet, capturyTime2)) {
 		CapturyRequestPacket req;
 		req.type = capturyGetTime;
 		req.size = sizeof(req);
-		if (!sendPacket((CapturyRequestPacket*)&req, capturyTime, 1))
+		if (!sendPacket((CapturyRequestPacket*)&req, capturyTime))
 			return 0;
 	}
 
