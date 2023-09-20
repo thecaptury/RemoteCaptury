@@ -65,7 +65,6 @@ typedef uint32_t uint;
 // #pragma GCC optimize("O0")
 #ifdef WIN32
 static HANDLE		thread;
-static HANDLE		receiveThread;
 static HANDLE		syncThread;
 static CRITICAL_SECTION	mutex;
 static CRITICAL_SECTION	partialActorMutex;
@@ -76,7 +75,6 @@ static CRITICAL_SECTION logMutex;
 #define SOCKET		int
 #define closesocket	close
 static pthread_t	thread;
-static pthread_t	receiveThread;
 static pthread_t	syncThread;
 struct CAPABILITY("mutex") MutexStruct {
 	pthread_mutex_t	m;
@@ -1536,7 +1534,6 @@ free(packet);
 
 			if (cpp->type == capturyPoseCont) {
 				char* at = ((char*)aData.inProgress[inProgressIndex].pose) + aData.inProgress[inProgressIndex].bytesDone / 6 * sizeof(CapturyTransform);
-				int numFloatsToCopy = numBytesToCopy / sizeof(float);
 				for (int i = 0; i < numBytesToCopy; i += 6, at += sizeof(CapturyTransform)) {
 					memcpy(at, cpc->values + i, 6*sizeof(float));
 					cpc->values[i + 6 + 0] = 1.0f;
@@ -1818,7 +1815,7 @@ extern "C" int Captury_getActors(const CapturyActor** actrs)
 	// add those new actors that we haven't seen yet
 	for (int i = 0; i < (int) newActors.size(); ++i) {
 		bool foundIt = false;
-		for (int n = 0; n < actors.size(); ++n) {
+		for (int n = 0; n < (int)actors.size(); ++n) {
 			if (actors[n].id == newActors[i].id) {
 				foundIt = true;
 				break;
