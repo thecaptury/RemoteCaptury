@@ -14,7 +14,10 @@
 
 #include <stdlib.h>
 #include <stdio.h>
+#define MAX(a, b) ((a) > (b) ? (a) : (b))
 #ifdef WIN32
+#undef max
+#undef min
 #pragma warning(disable : 4200)
 #pragma warning(disable : 4996)
 #define _CRT_SECURE_NO_WARNINGS
@@ -71,6 +74,7 @@ static CRITICAL_SECTION	partialActorMutex;
 static CRITICAL_SECTION syncMutex;
 static CRITICAL_SECTION logMutex;
 #define socklen_t int
+#define sleepMicroSeconds(us) Sleep(us / 1000)
 #else
 #define SOCKET		int
 #define closesocket	close
@@ -87,6 +91,7 @@ static MutexStruct partialActorMutex;
 static MutexStruct syncMutex;
 static MutexStruct logMutex;
 // static pthread_mutex_t	mutex = PTHREAD_MUTEX_INITIALIZER;
+#define sleepMicroSeconds(us) usleep(us)
 #endif
 static bool syncLoopIsRunning = false;
 
@@ -1068,11 +1073,11 @@ static void* receiveLoop(void* arg)
 					if (sock != -1)
 						break;
 
-					usleep(1000000);
+					sleepMicroSeconds(1000000);
 				}
 
 				if (streamWhat != CAPTURY_STREAM_NOTHING)
-					Captury_startStreamingImagesAndAngles(streamWhat, streamCamera, streamAngles.size(), streamAngles.data());
+					Captury_startStreamingImagesAndAngles(streamWhat, streamCamera, (int)streamAngles.size(), streamAngles.data());
 			}
 		}
 	}
@@ -1290,7 +1295,7 @@ free(packet);
 
 		tv.tv_sec = 0;
 		tv.tv_usec = 500000; // 0.5s = 2Hz
-		int ret = select((int)(std::max(sock, streamSock)+1), &reader, NULL, NULL, &tv);
+		int ret = select((int)(MAX(sock, streamSock)+1), &reader, NULL, NULL, &tv);
 		if (ret == -1) { // error
 			log("error waiting for stream socket\n");
 			lastErrorMessage = "Error waiting for stream socket";
@@ -2378,11 +2383,7 @@ static void* syncLoop(void* arg)
 		pingTime = getTime();
 		sendPacket((CapturyRequestPacket*)&packet, capturyTime2);
 
-#ifdef WIN32
-		Sleep(1000);
-#else
-		usleep(1000000);
-#endif
+		sleepMicroSeconds(1000000);
 	}
 }
 
