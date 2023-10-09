@@ -677,6 +677,11 @@ static bool receive(SOCKET& sok)
 		tv.tv_usec = 30000; // 30ms should be enough
 		int ret = select((int)(sok+1), &reader, NULL, NULL, &tv);
 		if (ret == -1) { // error
+			if (errno == EPIPE || errno == ECONNRESET || errno == ENETRESET || errno == EBADF) {
+				// connection closed by peer or network down
+				closesocket(sok);
+				sok = -1;
+			}
 			log("error waiting for socket\n");
 			return false;
 		}
