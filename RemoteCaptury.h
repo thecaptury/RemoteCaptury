@@ -418,6 +418,7 @@ typedef enum { capturyActors = 1, capturyActor = 2,
 	       capturyGetTime2 = 68, capturyTime2 = 69,
 	       capturyAngles = 70,
 	       capturyStartRecording2 = 71, capturyStartRecordingAck2 = 72,
+	       capturyHello = 73, // handshake finished
 	       capturyError = 0 } CapturyPacketTypes;
 
 // returns a string for nicer error messages

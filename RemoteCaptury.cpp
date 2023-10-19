@@ -73,6 +73,7 @@ static CRITICAL_SECTION	mutex;
 static CRITICAL_SECTION	partialActorMutex;
 static CRITICAL_SECTION syncMutex;
 static CRITICAL_SECTION logMutex;
+static bool mutexesInited = false;
 #define socklen_t int
 #define sleepMicroSeconds(us) Sleep(us / 1000)
 #else
@@ -207,6 +208,7 @@ static CapturyActorChangedCallback actorChangedCallback = NULL;
 static CapturyARTagCallback arTagCallback = NULL;
 static CapturyImageCallback imageCallback = NULL;
 
+static bool		handshakeFinished = false;
 static bool		isThreadRunning = false;
 static SOCKET		sock = -1;
 
@@ -648,8 +650,8 @@ static SOCKET openTcpSocket()
 
 	// set read timeout
 	struct timeval tv;
-	tv.tv_sec = 0;  /* 100 milliseconds Timeout */
-	tv.tv_usec = 100000;
+	tv.tv_sec = 0;  /* 500 milliseconds Timeout */
+	tv.tv_usec = 500000;
 	setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (char *)&tv, sizeof(struct timeval));
 
 #ifndef WIN32
@@ -660,7 +662,7 @@ static SOCKET openTcpSocket()
 	return sock;
 }
 
-// waits for at most 30ms before it fails
+// waits for at most 500ms before it fails
 // returns false if the expected packet is not received
 static bool receive(SOCKET& sok)
 {
@@ -674,7 +676,7 @@ static bool receive(SOCKET& sok)
 
 		struct timeval tv;
 		tv.tv_sec = 0;
-		tv.tv_usec = 30000; // 30ms should be enough
+		tv.tv_usec = 500000; // 500ms should be enough
 		int ret = select((int)(sok+1), &reader, NULL, NULL, &tv);
 		if (ret == -1) { // error
 			if (errno == EPIPE || errno == ECONNRESET || errno == ENETRESET || errno == EBADF) {
@@ -685,7 +687,7 @@ static bool receive(SOCKET& sok)
 			log("error waiting for socket\n");
 			return false;
 		}
-		if (ret == 0) {
+		if (ret == 0) { // timeout
 			return true;
 		}
 
@@ -715,22 +717,27 @@ static bool receive(SOCKET& sok)
 			return false;
 		}
 
-		size = recv(sok, buf+sizeof(CapturyRequestPacket), std::min<int>(p->size, sizeof(buf))-sizeof(CapturyRequestPacket), 0);
-		if (size == 0) { // the other end shut down the socket...
-			log("socket shut down by other end\n");
-			closesocket(sok);
-			sok = -1;
-			return false;
+		if (p->size > sizeof(CapturyRequestPacket)) {
+			size = recv(sok, buf + sizeof(CapturyRequestPacket), std::min<int>(p->size, sizeof(buf)) - sizeof(CapturyRequestPacket), 0);
+			if (size == 0) { // the other end shut down the socket...
+				log("socket shut down by other end\n");
+				closesocket(sok);
+				sok = -1;
+				return false;
+			}
+			if (size == -1) { // error
+				log("socket error\n");
+				return false;
+			}
+			size += sizeof(CapturyRequestPacket);
 		}
-		if (size == -1) { // error
-			log("socket error\n");
-			return false;
-		}
-		size += sizeof(CapturyRequestPacket);
 
-//		log("received packet size %d type %d (expected %d)\n", size, p->type, expect);
+		// log("received packet size %d type %d (expected %d)\n", size, p->type, expect);
 
 		switch (p->type) {
+		case capturyHello:
+			handshakeFinished = true;
+			break;
 		case capturyActors: {
 			CapturyActorsPacket* cap = (CapturyActorsPacket*)&buf[0];
 			log("expecting %d actor packets\n", cap->numActors);
@@ -1058,8 +1065,9 @@ static DWORD WINAPI receiveLoop(void* arg)
 static void* receiveLoop(void* arg)
 #endif
 {
+	bool handshaking = !handshakeFinished;
 	log("starting receive loop\n");
-	while (!stopReceiving) {
+	while (!stopReceiving && (!handshaking || !handshakeFinished)) {
 		if (!receive(sock)) {
 			if (sock == -1) {
 				if (isThreadRunning) {
@@ -1241,7 +1249,7 @@ static void* streamLoop(void* arg)
 	SOCKET streamSock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 	if (streamSock == -1) {
 		log("failed to create stream socket\n");
-free(packet);
+		free(packet);
 		return 0;
 	}
 
@@ -1700,10 +1708,13 @@ extern "C" int Captury_connect(const char* ip, unsigned short port)
 extern "C" int Captury_connect2(const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort)
 {
 #ifdef WIN32
-	InitializeCriticalSection(&mutex);
-	InitializeCriticalSection(&partialActorMutex);
-	InitializeCriticalSection(&syncMutex);
-	InitializeCriticalSection(&logMutex);
+	if (!mutexesInited) {
+		InitializeCriticalSection(&mutex);
+		InitializeCriticalSection(&partialActorMutex);
+		InitializeCriticalSection(&syncMutex);
+		InitializeCriticalSection(&logMutex);
+		mutexesInited = true;
+	}
 #endif
 
 	struct in_addr addr;
@@ -1739,7 +1750,11 @@ extern "C" int Captury_connect2(const char* ip, unsigned short port, unsigned sh
 		sock = openTcpSocket();
 	}
 
+	handshakeFinished = false;
+
 	stopReceiving = 0;
+	receiveLoop(nullptr); // block until handshake is finished
+
 #ifdef WIN32
 	thread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)receiveLoop, nullptr, 0, NULL);
 #else
@@ -1758,6 +1773,8 @@ extern "C" int Captury_disconnect()
 	closesocket(sock);
 
 	sock = -1;
+
+	handshakeFinished = false;
 
 	stopReceiving = 1;
 
@@ -1796,13 +1813,6 @@ extern "C" int Captury_disconnect()
 			free(it->second.currentTextures.data);
 	}
 	unlockMutex(&mutex);
-
-#ifdef WIN32
-	DeleteCriticalSection(&mutex);
-	DeleteCriticalSection(&partialActorMutex);
-	DeleteCriticalSection(&syncMutex);
-	DeleteCriticalSection(&logMutex);
-#endif
 
 	return 1;
 }
