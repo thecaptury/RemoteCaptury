@@ -5,6 +5,9 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <unordered_map>
+#include <memory>
+#include <list>
 #include <ctime>
 #include <time.h>
 
@@ -48,7 +51,6 @@
 #include <errno.h>
 #endif
 
-#include <list>
 #include <stdarg.h>
 
 typedef uint32_t uint;
@@ -104,11 +106,15 @@ static std::string currentDay;
 static std::string currentSession;
 static std::string currentShot;
 
+typedef std::shared_ptr<CapturyActor> CapturyActor_p;
+
+// actor id -> pointer to actor
+static std::unordered_map<int, CapturyActor_p> actorsById GUARDED_BY(mutex);
+static std::unordered_map<int, CapturyActor_p> partialActors GUARDED_BY(partialActorMutex); // actors that have been received in part
+static std::vector<CapturyActor> actorPointers; // used by Captury_getActors()
+
 static int numCameras = -1;
 static std::vector<CapturyCamera> cameras;
-static std::vector<CapturyActor> actors GUARDED_BY(mutex); // current actors
-static std::vector<CapturyActor> partialActors GUARDED_BY(partialActorMutex); // actors that have been received in part
-static std::vector<CapturyActor> newActors GUARDED_BY(mutex); // actors that have just been received
 
 static CapturyLatencyPacket currentLatency;
 static uint64_t receivedPoseTime; // time pose packet was received
@@ -118,8 +124,6 @@ static uint64_t dataReceivedTime;
 static uint64_t mostRecentPoseReceivedTime; // time pose was received
 static uint64_t mostRecentPoseReceivedTimestamp; // timestamp of that pose
 
-// actor id -> pointer to actor
-static std::map<int, CapturyActor*> actorsById GUARDED_BY(mutex);
 
 const char* CapturyActorStatusString[] = {"scaling", "tracking", "stopped", "deleted", "unknown"};
 
@@ -147,7 +151,7 @@ struct ActorData {
 
 	int			flags;
 
-	ActorData() : scalingProgress(0), trackingQuality(100), lastPoseTimestamp(0), status(ACTOR_DELETED), flags(0)
+	ActorData() : scalingProgress(0), trackingQuality(100), lastPoseTimestamp(0), status(ACTOR_STOPPED), flags(0)
 	{
 		currentPose.numTransforms = 0;
 		currentTextures.width = 0;
@@ -160,7 +164,7 @@ struct ActorData {
 	}
 };
 
-static std::map<int, ActorData> actorData GUARDED_BY(mutex);
+static std::unordered_map<int, ActorData> actorData GUARDED_BY(mutex);
 
 static std::map<int32_t, CapturyImage> currentImages;
 static std::map<int32_t, std::vector<int>> currentImagesReceivedPackets;
@@ -461,6 +465,8 @@ const char* Captury_getHumanReadableMessageType(CapturyPacketTypes type)
 		return "<start recording 2>";
 	case capturyStartRecordingAck2:
 		return "<start recording ack 2>";
+	case capturyHello:
+		return "<hello>";
 	case capturyError:
 		return "<error>";
 	}
@@ -717,7 +723,7 @@ static bool receive(SOCKET& sok)
 			return false;
 		}
 
-		if (p->size > sizeof(CapturyRequestPacket)) {
+		if (p->size > (int)sizeof(CapturyRequestPacket)) {
 			size = recv(sok, buf + sizeof(CapturyRequestPacket), std::min<int>(p->size, sizeof(buf)) - sizeof(CapturyRequestPacket), 0);
 			if (size == 0) { // the other end shut down the socket...
 				log("socket shut down by other end\n");
@@ -761,12 +767,12 @@ static bool receive(SOCKET& sok)
 		case capturyActor:
 		case capturyActor2:
 		case capturyActor3: {
-			CapturyActor actor;
+			CapturyActor_p actor(new CapturyActor);
 			CapturyActorPacket* cap = (CapturyActorPacket*)&buf[0];
-			strncpy(actor.name, cap->name, sizeof(actor.name));
-			actor.id = cap->id;
-			actor.numJoints = cap->numJoints;
-			actor.joints = new CapturyJoint[actor.numJoints];
+			strncpy(actor->name, cap->name, sizeof(actor->name));
+			actor->id = cap->id;
+			actor->numJoints = cap->numJoints;
+			actor->joints = new CapturyJoint[actor->numJoints];
 			char* at = (char*)cap->joints;
 			char* end = buf + size;
 			int version = (p->type == capturyActor) ? 1 : (p->type == capturyActor2) ? 2 : 3;
@@ -776,71 +782,71 @@ static bool receive(SOCKET& sok)
 				switch (version) {
 				case 1: {
 					CapturyJointPacket* jp = (CapturyJointPacket*)at;
-					actor.joints[j].parent = jp->parent;
+					actor->joints[j].parent = jp->parent;
 					for (int x = 0; x < 3; ++x) {
-						actor.joints[j].offset[x] = jp->offset[x];
-						actor.joints[j].orientation[x] = jp->orientation[x];
-						actor.joints[j].scale[x] = 1.0f;
+						actor->joints[j].offset[x] = jp->offset[x];
+						actor->joints[j].orientation[x] = jp->orientation[x];
+						actor->joints[j].scale[x] = 1.0f;
 					}
-					strncpy(actor.joints[j].name, jp->name, sizeof(actor.joints[j].name));
+					strncpy(actor->joints[j].name, jp->name, sizeof(actor->joints[j].name));
 					at += sizeof(CapturyJointPacket);
 					break; }
 				case 2: {
 					CapturyJointPacket2* jp = (CapturyJointPacket2*)at;
-					actor.joints[j].parent = jp->parent;
+					actor->joints[j].parent = jp->parent;
 					for (int x = 0; x < 3; ++x) {
-						actor.joints[j].offset[x] = jp->offset[x];
-						actor.joints[j].orientation[x] = jp->orientation[x];
-						actor.joints[j].scale[x] = 1.0f;
+						actor->joints[j].offset[x] = jp->offset[x];
+						actor->joints[j].orientation[x] = jp->orientation[x];
+						actor->joints[j].scale[x] = 1.0f;
 					}
-					strncpy(actor.joints[j].name, jp->name, sizeof(actor.joints[j].name)-1);
+					strncpy(actor->joints[j].name, jp->name, sizeof(actor->joints[j].name)-1);
 					at += sizeof(CapturyJointPacket2) + strlen(jp->name) + 1;
 					break; }
 				case 3: {
 					CapturyJointPacket3* jp = (CapturyJointPacket3*)at;
-					actor.joints[j].parent = jp->parent;
+					actor->joints[j].parent = jp->parent;
 					for (int x = 0; x < 3; ++x) {
-						actor.joints[j].offset[x] = jp->offset[x];
-						actor.joints[j].orientation[x] = jp->orientation[x];
-						actor.joints[j].scale[x] = jp->scale[x];
+						actor->joints[j].offset[x] = jp->offset[x];
+						actor->joints[j].orientation[x] = jp->orientation[x];
+						actor->joints[j].scale[x] = jp->scale[x];
 					}
-					strncpy(actor.joints[j].name, jp->name, sizeof(actor.joints[j].name)-1);
+					strncpy(actor->joints[j].name, jp->name, sizeof(actor->joints[j].name)-1);
 					at += sizeof(CapturyJointPacket3) + strlen(jp->name) + 1;
 					break; }
 				}
 				numTransmittedJoints = j + 1;
 			}
-			/*int numTransmittedJoints = std::min<int>((cap->size - sizeof(CapturyActorPacket)) / sizeof(CapturyJointPacket), actor.numJoints);
+			/*int numTransmittedJoints = std::min<int>((cap->size - sizeof(CapturyActorPacket)) / sizeof(CapturyJointPacket), actor->numJoints);
 			for (int j = 0; j < numTransmittedJoints; ++j) {
-				strcpy(actor.joints[j].name, cap->joints[j].name);
-				actor.joints[j].parent = cap->joints[j].parent;
+				strcpy(actor->joints[j].name, cap->joints[j].name);
+				actor->joints[j].parent = cap->joints[j].parent;
 				for (int x = 0; x < 3; ++x) {
-					actor.joints[j].offset[x] = cap->joints[j].offset[x];
-					actor.joints[j].orientation[x] = cap->joints[j].orientation[x];
+					actor->joints[j].offset[x] = cap->joints[j].offset[x];
+					actor->joints[j].orientation[x] = cap->joints[j].orientation[x];
 				}
 			}*/
-			for (int j = numTransmittedJoints; j < actor.numJoints; ++j) { // initialize to default values
-				strncpy(actor.joints[j].name, "uninitialized", sizeof(actor.joints[j].name));
-				actor.joints[j].parent = 0;
+			for (int j = numTransmittedJoints; j < actor->numJoints; ++j) { // initialize to default values
+				strncpy(actor->joints[j].name, "uninitialized", sizeof(actor->joints[j].name));
+				actor->joints[j].parent = 0;
 				for (int x = 0; x < 3; ++x) {
-					actor.joints[j].offset[x] = 0;
-					actor.joints[j].orientation[x] = 0;
+					actor->joints[j].offset[x] = 0;
+					actor->joints[j].orientation[x] = 0;
 				}
 			}
-			if (numTransmittedJoints < actor.numJoints) {
+			if (numTransmittedJoints < actor->numJoints) {
 				// expect = (version == 1) ? capturyActorContinued : (version == 2) ? capturyActorContinued2 : capturyActorContinued3;
 				// numRetries += 1;
 			}
-			log("received actor %x (%d/%d)\n", actor.id, numTransmittedJoints, actor.numJoints);
+			log("received actor %x (%d/%d)\n", actor->id, numTransmittedJoints, actor->numJoints);
 			p->type = capturyActor;
-			if (numTransmittedJoints == actor.numJoints) {
-				//log("received fulll actor %d\n", actor.id);
+			if (numTransmittedJoints == actor->numJoints) {
+				//log("received fulll actor %d\n", actor->id);
 				lockMutex(&mutex);
-				newActors.push_back(actor);
+				actorsById[actor->id] = actor;
 				unlockMutex(&mutex);
 			} else {
 				lockMutex(&partialActorMutex);
-				partialActors.push_back(actor);
+				partialActors[actor->id] = actor;
 				unlockMutex(&partialActorMutex);
 			}
 			break; }
@@ -850,71 +856,73 @@ static bool receive(SOCKET& sok)
 			int version = (p->type == capturyActor) ? 1 : (p->type == capturyActor2) ? 2 : 3;
 			CapturyActorContinuedPacket* cacp = (CapturyActorContinuedPacket*)&buf[0];
 			lockMutex(&partialActorMutex);
-			for (int i = 0; i < (int) partialActors.size(); ++i) {
-				if (partialActors[i].id != cacp->id)
-					continue;
-
-				CapturyActor& actor = partialActors[i];
-				int j = cacp->startJoint;
-				switch (version) {
-				case 1: {
-					CapturyJointPacket* end = (CapturyJointPacket*)&buf[size];
-					for (int k = 0; j < actor.numJoints && &cacp->joints[k] < end; ++j, ++k) {
-						strncpy(actor.joints[j].name, cacp->joints[k].name, sizeof(actor.joints[j].name)-1);
-						actor.joints[j].parent = cacp->joints[k].parent;
-						for (int x = 0; x < 3; ++x) {
-							actor.joints[j].offset[x] = cacp->joints[k].offset[x];
-							actor.joints[j].orientation[x] = cacp->joints[k].orientation[x];
-							actor.joints[j].scale[x] = 1.0f;
-						}
-					}
-					break; }
-				case 2: {
-					char* at = (char*)cacp->joints;
-					char* end = (char*)&buf[size];
-					for ( ; j < actor.numJoints && at < end; ++j) {
-						CapturyJointPacket2* jp = (CapturyJointPacket2*)at;
-						actor.joints[j].parent = jp->parent;
-						for (int x = 0; x < 3; ++x) {
-							actor.joints[j].offset[x] = jp->offset[x];
-							actor.joints[j].orientation[x] = jp->orientation[x];
-							actor.joints[j].scale[x] = 1.0f;
-						}
-						strncpy(actor.joints[j].name, jp->name, sizeof(actor.joints[j].name)-1);
-						at += sizeof(CapturyJointPacket2) + strlen(jp->name) + 1;
-					}
-					break; }
-				case 3: {
-					char* at = (char*)cacp->joints;
-					char* end = (char*)&buf[size];
-					for ( ; j < actor.numJoints && at < end; ++j) {
-						CapturyJointPacket3* jp = (CapturyJointPacket3*)at;
-						actor.joints[j].parent = jp->parent;
-						for (int x = 0; x < 3; ++x) {
-							actor.joints[j].offset[x] = jp->offset[x];
-							actor.joints[j].orientation[x] = jp->orientation[x];
-							actor.joints[j].scale[x] = jp->scale[x];
-						}
-						strncpy(actor.joints[j].name, jp->name, sizeof(actor.joints[j].name)-1);
-						at += sizeof(CapturyJointPacket3) + strlen(jp->name) + 1;
-					}
-					break; }
-				}
-				if (j == actor.numJoints) {
-					// log("received fulll actor %d\n", actor.id);
-					lockMutex(&mutex);
-					newActors.push_back(actor);
-					unlockMutex(&mutex);
-					partialActors.erase(partialActors.begin() + i);
-				} else {
-					// expect is already set correctly
-					// numRetries += 1;
-					// packetsMissing += 1;
-				}
-				log("received actor cont %d (%d/%d)\n", actor.id, j, actor.numJoints);
+			if (partialActors.count(cacp->id) == 0) {
+				unlockMutex(&partialActorMutex);
 				break;
 			}
+
+			CapturyActor_p actor = partialActors[cacp->id];
 			unlockMutex(&partialActorMutex);
+
+			int j = cacp->startJoint;
+			switch (version) {
+			case 1: {
+				CapturyJointPacket* end = (CapturyJointPacket*)&buf[size];
+				for (int k = 0; j < actor->numJoints && &cacp->joints[k] < end; ++j, ++k) {
+					strncpy(actor->joints[j].name, cacp->joints[k].name, sizeof(actor->joints[j].name)-1);
+					actor->joints[j].parent = cacp->joints[k].parent;
+					for (int x = 0; x < 3; ++x) {
+						actor->joints[j].offset[x] = cacp->joints[k].offset[x];
+						actor->joints[j].orientation[x] = cacp->joints[k].orientation[x];
+						actor->joints[j].scale[x] = 1.0f;
+					}
+				}
+				break; }
+			case 2: {
+				char* at = (char*)cacp->joints;
+				char* end = (char*)&buf[size];
+				for ( ; j < actor->numJoints && at < end; ++j) {
+					CapturyJointPacket2* jp = (CapturyJointPacket2*)at;
+					actor->joints[j].parent = jp->parent;
+					for (int x = 0; x < 3; ++x) {
+						actor->joints[j].offset[x] = jp->offset[x];
+						actor->joints[j].orientation[x] = jp->orientation[x];
+						actor->joints[j].scale[x] = 1.0f;
+					}
+					strncpy(actor->joints[j].name, jp->name, sizeof(actor->joints[j].name)-1);
+					at += sizeof(CapturyJointPacket2) + strlen(jp->name) + 1;
+				}
+				break; }
+			case 3: {
+				char* at = (char*)cacp->joints;
+				char* end = (char*)&buf[size];
+				for ( ; j < actor->numJoints && at < end; ++j) {
+					CapturyJointPacket3* jp = (CapturyJointPacket3*)at;
+					actor->joints[j].parent = jp->parent;
+					for (int x = 0; x < 3; ++x) {
+						actor->joints[j].offset[x] = jp->offset[x];
+						actor->joints[j].orientation[x] = jp->orientation[x];
+						actor->joints[j].scale[x] = jp->scale[x];
+					}
+					strncpy(actor->joints[j].name, jp->name, sizeof(actor->joints[j].name)-1);
+					at += sizeof(CapturyJointPacket3) + strlen(jp->name) + 1;
+				}
+				break; }
+			}
+			if (j == actor->numJoints) {
+				// log("received fulll actor %d\n", actor->id);
+				lockMutex(&mutex);
+				actorsById[actor->id] = actor;
+				unlockMutex(&mutex);
+				lockMutex(&partialActorMutex);
+				partialActors.erase(actor->id);
+				unlockMutex(&partialActorMutex);
+			} else {
+				// expect is already set correctly
+				// numRetries += 1;
+				// packetsMissing += 1;
+			}
+			log("received actor cont %d (%d/%d)\n", actor->id, j, actor->numJoints);
 			break; }
 		case capturyCamera: {
 			CapturyCamera camera;
@@ -1059,6 +1067,27 @@ static bool receive(SOCKET& sok)
 	return true;
 }
 
+static void deleteActors()
+{
+	log("deleting all actors\n");
+	lockMutex(&mutex);
+	for (auto it : actorsById)
+		delete[] it.second->joints;
+	actorsById.clear();
+
+	std::unordered_map<int, ActorData>::iterator it;
+	for (it = actorData.begin(); it != actorData.end(); ++it) {
+		if (it->second.currentPose.numTransforms != 0) {
+			delete[] it->second.currentPose.transforms;
+			it->second.currentPose.numTransforms = 0; // should not be necessary but weird things do happen
+			it->second.currentPose.transforms = NULL;
+		}
+		if (it->second.currentTextures.data != NULL)
+			free(it->second.currentTextures.data);
+	}
+	unlockMutex(&mutex);
+}
+
 #ifdef WIN32
 static DWORD WINAPI receiveLoop(void* arg)
 #else
@@ -1070,6 +1099,8 @@ static void* receiveLoop(void* arg)
 	while (!stopReceiving && (!handshaking || !handshakeFinished)) {
 		if (!receive(sock)) {
 			if (sock == -1) {
+				deleteActors();
+
 				if (isThreadRunning) {
 					stopStreamThread = 1;
 
@@ -1130,46 +1161,16 @@ static void receivedPose(CapturyPose* pose, int actorId, ActorData* aData, uint6
 		}
 	}
 
-	if (newPoseCallback != NULL) {
-		if (actorsById[actorId]) {
-			CapturyActor* actor = actorsById[actorId];
-			unlockMutex(&mutex);
-			newPoseCallback(actor, pose, aData->trackingQuality);
-			lockMutex(&mutex);
-		} else {
-			bool added = false;
-			while (!newActors.empty()) {
-				CapturyActor& actor = newActors.back();
-				if (actorsById.count(actor.id) == 0 || actorsById[actor.id] == nullptr) {
-					actors.push_back(actor);
-					added = true;
-				}
-				newActors.pop_back();
-			}
-			if (added) {
-				actorsById.clear();
-				for (CapturyActor& actor : actors)
-					actorsById[actor.id] = &actor;
-			}
-
-			if (actorsById.count(actorId) == 0 || actorsById[actorId] == nullptr) {
-				CapturyRequestPacket packet;
-				packet.type = capturyActors2;
-				packet.size = sizeof(packet);
-
-				sendPacket(&packet, capturyActors);
-			} else {
-				CapturyActor* actor = actorsById[actorId];
-				unlockMutex(&mutex);
-				newPoseCallback(actor, pose, aData->trackingQuality);
-				lockMutex(&mutex);
-			}
-		}
+	if (newPoseCallback != NULL && actorsById.count(actorId)) {
+		CapturyActor* actor = actorsById[actorId].get();
+		unlockMutex(&mutex);
+		newPoseCallback(actor, pose, aData->trackingQuality);
+		lockMutex(&mutex);
 	}
 
 	// mark actors as stopped if no data was received for a while
 	now -= 500000; // half a second ago
-	for (std::map<int, ActorData>::iterator it = actorData.begin(); it != actorData.end(); ++it) {
+	for (std::unordered_map<int, ActorData>::iterator it = actorData.begin(); it != actorData.end(); ++it) {
 		if (it->second.lastPoseTimestamp > now) // still current
 			continue;
 
@@ -1315,7 +1316,6 @@ static void* streamLoop(void* arg)
 			return 0;
 		}
 		if (ret == 0) {
-			log("stream timed out\n");
 			lastErrorMessage = "Stream timed out";
 			continue;
 		}
@@ -1355,7 +1355,7 @@ static void* streamLoop(void* arg)
 
 			// check if we have a texture already
 			lockMutex(&mutex);
-			std::map<int, ActorData>::iterator it = actorData.find(cip->actor);
+			std::unordered_map<int, ActorData>::iterator it = actorData.find(cip->actor);
 			if (it == actorData.end()) {
 				unlockMutex(&mutex);
 				log("received image data for actor %x without having received image header\n", cip->actor);
@@ -1525,7 +1525,7 @@ static void* streamLoop(void* arg)
 				continue;
 			}
 
-			std::map<int, ActorData>::iterator it = actorData.find(cpp->actor);
+			std::unordered_map<int, ActorData>::iterator it = actorData.find(cpp->actor);
 			ActorData& aData = it->second;
 			int inProgressIndex = -1;
 			for (int x = 0; x < 4; ++x) {
@@ -1559,7 +1559,7 @@ static void* streamLoop(void* arg)
 					cpc->values[i + 6 + 2] = 1.0f;
 				}
 			} else
-				decompressPose(aData.inProgress[inProgressIndex].pose, (float*)(((char*)aData.inProgress[inProgressIndex].pose) + aData.inProgress[inProgressIndex].bytesDone), (uint8_t*)cpc->values, numBytesToCopy / 10, actorsById[cpp->actor], false);
+				decompressPose(aData.inProgress[inProgressIndex].pose, (float*)(((char*)aData.inProgress[inProgressIndex].pose) + aData.inProgress[inProgressIndex].bytesDone), (uint8_t*)cpc->values, numBytesToCopy / 10, actorsById[cpp->actor].get(), false);
 			aData.inProgress[inProgressIndex].bytesDone += numBytesToCopy;
 			if (aData.inProgress[inProgressIndex].bytesDone == totalBytes) {
 				memcpy(aData.currentPose.transforms, aData.inProgress[inProgressIndex].pose, totalBytes);
@@ -1613,13 +1613,13 @@ static void* streamLoop(void* arg)
 			at = (int)((char*)(((CapturyPosePacket2*)cpp)->values) - (char*)cpp);
 		}
 
-		if (actorsById.count(cpp->actor) != 0 && actorsById[cpp->actor] && actorsById[cpp->actor]->numJoints * 6 != numValues) {
+		if (actorsById.count(cpp->actor) != 0 && actorsById[cpp->actor]->numJoints * 6 != numValues) {
 			log("expected %d dofs, got %d\n", actorsById[cpp->actor]->numJoints * 6, numValues);
 			unlockMutex(&mutex);
 			continue;
 		}
 
-		std::map<int, ActorData>::iterator it = actorData.find(cpp->actor);
+		std::unordered_map<int, ActorData>::iterator it = actorData.find(cpp->actor);
 		if (it == actorData.end() || it->second.currentPose.numTransforms == 0) {
 			it = actorData.insert(std::make_pair(cpp->actor, ActorData())).first;
 			it->second.currentPose.actor = cpp->actor;
@@ -1666,7 +1666,7 @@ static void* streamLoop(void* arg)
 				copyTo[6 + 2] = 1.0f;
 			}
 		} else // compressed
-			decompressPose(copyTo, copyTo, (uint8_t*)values, numValues / 6, actorsById[cpp->actor], true);
+			decompressPose(copyTo, copyTo, (uint8_t*)values, numValues / 6, actorsById[cpp->actor].get(), true);
 
 		if (numBytesToCopy == numValues * (int)sizeof(float))
 			receivedPose(&it->second.currentPose, cpp->actor, &it->second, cpp->timestamp);
@@ -1738,10 +1738,6 @@ extern "C" int Captury_connect2(const char* ip, unsigned short port, unsigned sh
 	remoteAddress.sin_port = htons(port);
 
 	if (sock == -1) {
-		lockMutex(&mutex);
-		actors.reserve(32);
-		unlockMutex(&mutex);
-
 #ifdef WIN32
 		WSADATA init;
 		const int ret = WSAStartup(WINSOCK_VERSION, &init);
@@ -1791,28 +1787,7 @@ extern "C" int Captury_disconnect()
 	pthread_join(thread, &retVal);
 #endif
 
-	lockMutex(&mutex);
-	for (int i = 0; i < (int) actors.size(); ++i) {
-		if (actors[i].joints != nullptr) {
-			delete[] actors[i].joints;
-			actors[i].joints = nullptr;
-		}
-	}
-
-	actors.clear();
-	actorsById.clear();
-
-	std::map<int, ActorData>::iterator it;
-	for (it = actorData.begin(); it != actorData.end(); ++it) {
-		if (it->second.currentPose.numTransforms != 0) {
-			delete[] it->second.currentPose.transforms;
-			it->second.currentPose.numTransforms = 0; // should not be necessary but weird things do happen
-			it->second.currentPose.transforms = NULL;
-		}
-		if (it->second.currentTextures.data != NULL)
-			free(it->second.currentTextures.data);
-	}
-	unlockMutex(&mutex);
+	deleteActors();
 
 	return 1;
 }
@@ -1821,42 +1796,33 @@ extern "C" int Captury_disconnect()
 // the array is owned by the library - do not free
 extern "C" int Captury_getActors(const CapturyActor** actrs)
 {
-	if (sock == -1 || actrs == NULL)
-		return 0;
-
-	// CapturyRequestPacket packet;
-	// packet.type = capturyActors2;
-	// packet.size = sizeof(packet);
-
-	// if (!sendPacket(&packet, capturyActors))
-	// 	return 0;
-
 	lockMutex(&mutex);
-	// add those new actors that we haven't seen yet
-	for (int i = 0; i < (int) newActors.size(); ++i) {
-		bool foundIt = false;
-		for (int n = 0; n < (int)actors.size(); ++n) {
-			if (actors[n].id == newActors[i].id) {
-				foundIt = true;
-				break;
-			}
-		}
-		if (!foundIt)
-			actors.push_back(newActors[i]);
+
+	actorPointers.clear();
+	actorPointers.reserve(actorsById.size());
+
+	std::vector<int> deleted;
+	int numActors = 0;
+	for (auto it : actorsById) {
+		if (actorData[it.first].status != ACTOR_DELETED) {
+			actorPointers.push_back(*it.second.get());
+			++numActors;
+		} else
+			deleted.push_back(it.first);
 	}
 
-	newActors.clear();
+	// house keeping
+	for (int id : deleted) {
+		log("deleting actor %s %x status %d\n", actorsById[id]->name, id, actorData[id].status);
+		delete[] actorsById[id]->joints;
+		actorsById.erase(id);
+		delete[] actorData[id].currentPose.transforms;
+		if (actorData[id].currentTextures.data != NULL)
+			free(actorData[id].currentTextures.data);
+		actorData.erase(id);
+	}
 
-	actorsById.clear();
-	for (int i = 0; i < (int) actors.size(); ++i)
-		actorsById[actors[i].id] = &actors[i];
-
-	int numActors = (int)actors.size();
-
-	if (actors.size() > 0)
-		*actrs = &actors[0];
-	else
-		*actrs = NULL;
+	*actrs = (numActors == 0) ? NULL : const_cast<const CapturyActor*>(actorPointers.data());
 	unlockMutex(&mutex);
 
 	return numActors;
@@ -1873,53 +1839,15 @@ extern "C" const CapturyActor* Captury_getActor(int id)
 		return NULL;
 
 	lockMutex(&mutex);
-	// if the actor is already known, we don't have to ask the server
-	for (int i = 0; i < (int) actors.size(); ++i) {
-		if (actors[i].id == id) {
-			CapturyActor* actor = &actors[i];
-			unlockMutex(&mutex);
-			return actor;
-		}
+	if (actorsById.count(id) == 0) {
+		unlockMutex(&mutex);
+		return NULL;
 	}
+
+	CapturyActor* ret = actorsById[id].get();
 	unlockMutex(&mutex);
 
-	// CapturyRequestPacket packet;
-	// packet.type = capturyActors2;
-	// packet.size = sizeof(packet);
-
-	// if (!sendPacket(&packet, capturyActors))
-	// 	return NULL;
-
-	lockMutex(&mutex);
-	// clear list - we are getting a new one now.
-	// stupid C interface requires us to do the cleanup manually
-	for (int i = 0; i < (int)actors.size(); ++i) {
-		if (actors[i].joints != nullptr) {
-			delete[] actors[i].joints;
-			actors[i].joints = nullptr;
-		}
-	}
-
-	actors.resize(newActors.size());
-	for (int i = 0; i < (int) actors.size(); ++i)
-		actors[i] = newActors[i];
-
-	newActors.clear();
-
-	actorsById.clear();
-	for (int i = 0; i < (int) actors.size(); ++i)
-		actorsById[actors[i].id] = &actors[i];
-
-	for (int i = 0; i < (int) actors.size(); ++i) {
-		if (actors[i].id == id) {
-			CapturyActor* actor = &actors[i];
-			unlockMutex(&mutex);
-			return actor;
-		}
-	}
-	unlockMutex(&mutex);
-
-	return NULL;
+	return ret;
 }
 
 // returns the number of cameras
@@ -2063,7 +1991,7 @@ extern "C" CapturyPose* Captury_getCurrentPoseAndTrackingConsistencyForActor(int
 	uint64_t now = getTime() - 500000; // half a second ago
 	bool stillCurrent = true;
 	lockMutex(&mutex);
-	for (std::map<int, ActorData>::iterator it = actorData.begin(); it != actorData.end(); ++it) {
+	for (std::unordered_map<int, ActorData>::iterator it = actorData.begin(); it != actorData.end(); ++it) {
 		if (it->second.lastPoseTimestamp > now) // still current
 			continue;
 
@@ -2085,7 +2013,7 @@ extern "C" CapturyPose* Captury_getCurrentPoseAndTrackingConsistencyForActor(int
 	}
 
 	// uint64_t now = getTime();
-	std::map<int, ActorData>::iterator it = actorData.find(actorId);
+	std::unordered_map<int, ActorData>::iterator it = actorData.find(actorId);
 	if (it == actorData.end()) {
 		char buf[400];
 		snprintf(buf, 400, "Requested pose for unknown actor %d, have poses ", actorId);
@@ -2137,7 +2065,7 @@ extern "C" void Captury_freePose(CapturyPose* pose)
 extern "C" int Captury_getActorStatus(int actorId)
 {
 	lockMutex(&mutex);
-	std::map<int, ActorData>::iterator it = actorData.find(actorId);
+	std::unordered_map<int, ActorData>::iterator it = actorData.find(actorId);
 	if (it == actorData.end()) {
 		unlockMutex(&mutex);
 		return ACTOR_UNKNOWN;
@@ -2199,7 +2127,7 @@ extern "C" CapturyImage* Captury_getTexture(int actorId)
 {
 	// check if we don't have a texture yet
 	lockMutex(&mutex);
-	std::map<int, ActorData>::iterator it = actorData.find(actorId);
+	std::unordered_map<int, ActorData>::iterator it = actorData.find(actorId);
 	if (it == actorData.end()) {
 		unlockMutex(&mutex);
 		return 0;
@@ -2830,7 +2758,10 @@ static void decompose(const float* mat, float* euler) // checked
 
 void Captury_convertPoseToLocal(CapturyPose* pose, int actorId) REQUIRES(mutex)
 {
-	CapturyActor* actor = actorsById[actorId];
+	if (actorsById.count(actorId) == 0)
+		return;
+
+	CapturyActor* actor = actorsById[actorId].get();
 	CapturyTransform* at = pose->transforms;
 	float* matrices = (float*)malloc(sizeof(float) * 16 * actor->numJoints);
 	for (int i = 0; i < actor->numJoints; ++i, ++at) {
