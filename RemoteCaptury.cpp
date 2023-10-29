@@ -1210,17 +1210,17 @@ static void decompressPose(const float* values, float* copyTo, uint8_t* v, int n
 			int32_t t = v[0] | (v[1] << 8);
 			if ((t & 0x8000) != 0)
 				t |= 0xFFFF0000;
-			copyTo[0] = t * 0.0625f + values[actor->joints[i].parent*9];
+			copyTo[0] = t * 0.0625f + values[actor->joints[i].parent*6];
 			v += 2;
 			t = v[0] | (v[1] << 8);
 			if ((t & 0x8000) != 0)
 				t |= 0xFFFF0000;
-			copyTo[1] = t * 0.0625f + values[actor->joints[i].parent*9+1];
+			copyTo[1] = t * 0.0625f + values[actor->joints[i].parent*6+1];
 			v += 2;
 			t = v[0] | (v[1] << 8);
 			if ((t & 0x8000) != 0)
 				t |= 0xFFFF0000;
-			copyTo[2] = t * 0.0625f + values[actor->joints[i].parent*9+2];
+			copyTo[2] = t * 0.0625f + values[actor->joints[i].parent*6+2];
 			v += 2;
 		}
 
@@ -1230,10 +1230,7 @@ static void decompressPose(const float* values, float* copyTo, uint8_t* v, int n
 		copyTo[3] = ((rall & 0x000007FF))       * (360.0f / 2047) - 180.0f;
 		copyTo[4] = ((rall & 0x003FF800) >> 11) * (360.0f / 2047) - 180.0f;
 		copyTo[5] = ((rall & 0xFFC00000) >> 22) * (180.0f / 1023);
-		copyTo[6] = 1.0f;
-		copyTo[7] = 1.0f;
-		copyTo[8] = 1.0f;
-		copyTo += 9;
+		copyTo += 6;
 	}
 }
 
@@ -1659,11 +1656,8 @@ static void* streamLoop(void* arg)
 		}
 
 		if (cpp->type == capturyPose || cpp->type == capturyPose2) {
-			for (int i = 0; i < numBytesToCopy; i += 6 * sizeof(float), copyTo += 9, values += 6) {
+			for (int i = 0; i < numBytesToCopy; i += 6 * sizeof(float), copyTo += 6, values += 6) {
 				memcpy(copyTo, values, 6 * sizeof(float));
-				copyTo[6 + 0] = 1.0f;
-				copyTo[6 + 1] = 1.0f;
-				copyTo[6 + 2] = 1.0f;
 			}
 		} else // compressed
 			decompressPose(copyTo, copyTo, (uint8_t*)values, numValues / 6, actorsById[cpp->actor].get(), true);
@@ -1978,7 +1972,7 @@ extern "C" int Captury_stopStreaming()
 }
 
 // fills the pose with the current pose for the given actor
-// the client is responsible for providing sufficient space (actor->numJoints*9) in pose->values
+// the client is responsible for providing sufficient space (actor->numJoints*6) in pose->values
 // returns 1 if successful, 0 otherwise
 extern "C" CapturyPose* Captury_getCurrentPoseForActor(int actorId)
 {
