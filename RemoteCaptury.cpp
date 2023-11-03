@@ -1737,7 +1737,8 @@ extern "C" int Captury_connect2(const char* ip, unsigned short port, unsigned sh
 		const int ret = WSAStartup(WINSOCK_VERSION, &init);
 #endif
 
-		sock = openTcpSocket();
+		if((sock = openTcpSocket()) == -1)
+			return 0;
 	}
 
 	handshakeFinished = false;
