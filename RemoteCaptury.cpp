@@ -640,17 +640,17 @@ static SOCKET openTcpSocket()
 {
 	log("opening TCP socket\n");
 
-	SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-	if (sock == -1)
+	SOCKET sok = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	if (sok == -1)
 		return -1;
 
-	if (localAddress.sin_port != 0 && bind(sock, (sockaddr*) &localAddress, sizeof(localAddress)) != 0) {
-		closesocket(sock);
+	if (localAddress.sin_port != 0 && bind(sok, (sockaddr*) &localAddress, sizeof(localAddress)) != 0) {
+		closesocket(sok);
 		return -1;
 	}
 
-	if (connect(sock, (sockaddr*) &remoteAddress, sizeof(remoteAddress)) != 0) {
-		closesocket(sock);
+	if (connect(sok, (sockaddr*) &remoteAddress, sizeof(remoteAddress)) != 0) {
+		closesocket(sok);
 		return -1;
 	}
 
@@ -658,14 +658,14 @@ static SOCKET openTcpSocket()
 	struct timeval tv;
 	tv.tv_sec = 0;  /* 500 milliseconds Timeout */
 	tv.tv_usec = 500000;
-	setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (char *)&tv, sizeof(struct timeval));
+	setsockopt(sok, SOL_SOCKET, SO_RCVTIMEO, (char *)&tv, sizeof(struct timeval));
 
 #ifndef WIN32
 	char buf[100];
 	log("connected to %s:%d\n", inet_ntop(AF_INET, &remoteAddress.sin_addr, buf, 100), ntohs(remoteAddress.sin_port));
 #endif
 
-	return sock;
+	return sok;
 }
 
 // waits for at most 500ms before it fails
