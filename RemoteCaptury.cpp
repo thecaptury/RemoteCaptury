@@ -68,7 +68,9 @@ typedef uint32_t uint;
 #define RELEASE(...)		THREAD_ANNOTATION_ATTRIBUTE__(release_capability(__VA_ARGS__))
 // #pragma clang optimize off
 // #pragma GCC optimize("O0")
+
 #ifdef WIN32
+
 static HANDLE		thread;
 static HANDLE		syncThread;
 static CRITICAL_SECTION	mutex;
@@ -78,7 +80,19 @@ static CRITICAL_SECTION logMutex;
 static bool mutexesInited = false;
 #define socklen_t int
 #define sleepMicroSeconds(us) Sleep(us / 1000)
+
+static inline int sockerror()		{ return WSAGetLastError(); }
+static inline const char* sockstrerror(int err) { static char msg[200]; FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM, nullptr, err, MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL), msg, sizeof(msg), nullptr); return msg; }
+static inline const char* sockstrerror() { static char msg[200]; FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM, nullptr, WSAGetLastError(), MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL), msg, sizeof(msg), nullptr); return msg; }
+
+static inline int setSocketTimeout(SOCKET sock, int timeout_ms)
+{
+	DWORD timeout = timeout_ms; // timeout in ms
+	return setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
+}
+
 #else
+
 #define SOCKET		int
 #define closesocket	close
 static pthread_t	thread;
@@ -95,10 +109,24 @@ static MutexStruct syncMutex;
 static MutexStruct logMutex;
 // static pthread_mutex_t	mutex = PTHREAD_MUTEX_INITIALIZER;
 #define sleepMicroSeconds(us) usleep(us)
+
+static inline int sockerror()		{ return errno; }
+static inline const char* sockstrerror(int err) { return strerror(err); }
+static inline const char* sockstrerror() { return strerror(errno); }
+
+static inline int setSocketTimeout(SOCKET sock, int timeout_ms)
+{
+	struct timeval tv;
+	tv.tv_sec = timeout_ms / 1000;// seconds timeout
+	tv.tv_usec = (timeout_ms % 1000) * 1000;
+	return setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (char*)&tv, sizeof(tv));
+}
+
 #endif
+
 static bool syncLoopIsRunning = false;
 
-static int streamWhat;
+static int streamWhat = CAPTURY_STREAM_NOTHING;
 static int32_t streamCamera;
 static std::vector<uint16_t> streamAngles;
 
@@ -655,10 +683,7 @@ static SOCKET openTcpSocket()
 	}
 
 	// set read timeout
-	struct timeval tv;
-	tv.tv_sec = 0;  /* 500 milliseconds Timeout */
-	tv.tv_usec = 500000;
-	setsockopt(sok, SOL_SOCKET, SO_RCVTIMEO, (char *)&tv, sizeof(struct timeval));
+	setSocketTimeout(sok, 500);
 
 #ifndef WIN32
 	char buf[100];
@@ -666,6 +691,24 @@ static SOCKET openTcpSocket()
 #endif
 
 	return sok;
+}
+
+static bool isSocketErrorFatal(int err)
+{
+#ifdef WIN32
+	return (err == WSAENOTSOCK || err == WSAESHUTDOWN || err == WSAECONNABORTED || err == WSAECONNRESET || err == WSAENETDOWN || err == WSAENETUNREACH || err == WSAENETRESET || err == WSAEBADF);
+#else
+	return (err == EPIPE || err == ECONNRESET || err == ENETRESET || err == EBADF);
+#endif
+}
+
+static bool isSocketErrorTryAgain(int err)
+{
+#ifdef WIN32
+	return (err == WSAEINTR || err == WSAETIMEDOUT || err == WSAEWOULDBLOCK || err == WSAEINPROGRESS);
+#else
+	return (err == EAGAIN || err == EBUSY || err == EINTR);
+#endif
 }
 
 // waits for at most 500ms before it fails
@@ -685,12 +728,13 @@ static bool receive(SOCKET& sok)
 		tv.tv_usec = 500000; // 500ms should be enough
 		int ret = select((int)(sok+1), &reader, NULL, NULL, &tv);
 		if (ret == -1) { // error
-			if (errno == EPIPE || errno == ECONNRESET || errno == ENETRESET || errno == EBADF) {
+			int err = sockerror();
+			if (isSocketErrorFatal(err)) {
 				// connection closed by peer or network down
 				closesocket(sok);
 				sok = -1;
 			}
-			log("error waiting for socket\n");
+			log("error waiting for socket: %s\n", sockstrerror(err));
 			return false;
 		}
 		if (ret == 0) { // timeout
@@ -713,26 +757,36 @@ static bool receive(SOCKET& sok)
 		// first peek to find out which packet type this is
 		int size = recv(sok, buf, sizeof(CapturyRequestPacket), 0);
 		if (size == 0) { // the other end shut down the socket...
-			log("socket shut down by other end\n");
+			log("socket shut down by other end: %s\n", sockstrerror());
 			closesocket(sok);
 			sok = -1;
 			return false;
 		}
 		if (size == -1) { // error
-			log("socket error\n");
+			int err = sockerror();
+			log("socket error %s\n", sockstrerror(err));
+			if (isSocketErrorFatal(err)) {
+				closesocket(sok);
+				sok = -1;
+			}
 			return false;
 		}
 
 		if (p->size > (int)sizeof(CapturyRequestPacket)) {
 			size = recv(sok, buf + sizeof(CapturyRequestPacket), std::min<int>(p->size, sizeof(buf)) - sizeof(CapturyRequestPacket), 0);
 			if (size == 0) { // the other end shut down the socket...
-				log("socket shut down by other end\n");
+				log("socket shut down by other end: %s\n", sockstrerror());
 				closesocket(sok);
 				sok = -1;
 				return false;
 			}
 			if (size == -1) { // error
-				log("socket error\n");
+				int err = sockerror();
+				log("socket error: %s\n", sockstrerror(err));
+				if (isSocketErrorFatal(err)) {
+					closesocket(sok);
+					sok = -1;
+				}
 				return false;
 			}
 			size += sizeof(CapturyRequestPacket);
@@ -1105,7 +1159,7 @@ static void* receiveLoop(void* arg)
 					stopStreamThread = 1;
 
 					#ifdef WIN32
-					WaitForSingleObject(thread, 1000);
+					WaitForSingleObject(thread, 10000);
 					#else
 					void* retVal;
 					pthread_join(thread, &retVal);
@@ -1122,6 +1176,8 @@ static void* receiveLoop(void* arg)
 
 				if (streamWhat != CAPTURY_STREAM_NOTHING)
 					Captury_startStreamingImagesAndAngles(streamWhat, streamCamera, (int)streamAngles.size(), streamAngles.data());
+
+				handshaking = false; // this is a lie but makes it go into the normal loop
 			}
 		}
 	}
@@ -1266,10 +1322,7 @@ static void* streamLoop(void* arg)
 	}
 
 	// set read timeout
-	struct timeval tv;
-	tv.tv_sec = 0;  /* 100 milliseconds Timeout */
-	tv.tv_usec = 100000;
-	setsockopt(streamSock, SOL_SOCKET, SO_RCVTIMEO, (char *)&tv, sizeof(struct timeval));
+	setSocketTimeout(streamSock, 100);
 
 	struct sockaddr_in thisEnd;
 	{
@@ -1297,10 +1350,9 @@ static void* streamLoop(void* arg)
 	}
 
 	while (!stopStreamThread) {
-		fd_set reader;
+/*		fd_set reader;
 		FD_ZERO(&reader);
 		FD_SET(streamSock, &reader);
-		FD_SET(sock, &reader);
 
 		// keep the streaming alive
 
@@ -1315,7 +1367,7 @@ static void* streamLoop(void* arg)
 		if (ret == 0) {
 			lastErrorMessage = "Stream timed out";
 			continue;
-		}
+		}*/
 
 		dataAvailableTime = getRemoteTime(getTime());
 
@@ -1330,14 +1382,11 @@ static void* streamLoop(void* arg)
 			continue;
 		}
 		if (size == -1) { // error
-			if (errno == EAGAIN)
+			int err = sockerror();
+			if (isSocketErrorTryAgain(err))
 				continue;
 			char buff[200];
-			#ifdef WIN32
-			sprintf(buff, "Stream socket error: %d", WSAGetLastError());
-			#else
-			sprintf(buff, "Stream socket error: %s", strerror(errno));
-			#endif
+			sprintf(buff, "Stream socket error: %s", sockstrerror(err));
 			lastErrorMessage = buff;
 			log("streaming error: %s\n", buff);
 			break;
@@ -1671,17 +1720,6 @@ static void* streamLoop(void* arg)
 
 	isThreadRunning = false;
 
-	CapturyStreamPacketTcp pkt;
-	pkt.type = capturyStream;
-	pkt.size = sizeof(pkt);
-	pkt.what = CAPTURY_STREAM_NOTHING;
-	pkt.ip = thisEnd.sin_addr.s_addr;
-	pkt.port = thisEnd.sin_port;
-
-	if (send(sock, (const char*)&pkt, pkt.size, 0) != sizeof(pkt)) {
-		log("failed sending stream nothing packet.\n");
-	}
-
 	closesocket(streamSock);
 
 	streamSocketPort = 0;
@@ -1695,11 +1733,11 @@ static void* streamLoop(void* arg)
 
 extern "C" int Captury_connect(const char* ip, unsigned short port)
 {
-	return Captury_connect2(ip, port, 0, 0);
+	return Captury_connect2(ip, port, 0, 0, 0);
 }
 
 // returns 1 if successful, 0 otherwise
-extern "C" int Captury_connect2(const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort)
+extern "C" int Captury_connect2(const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort, int async)
 {
 #ifdef WIN32
 	if (!mutexesInited) {
@@ -1731,20 +1769,22 @@ extern "C" int Captury_connect2(const char* ip, unsigned short port, unsigned sh
 	remoteAddress.sin_addr = addr;
 	remoteAddress.sin_port = htons(port);
 
-	if (sock == -1) {
+	handshakeFinished = false;
+	stopReceiving = 0;
+
+	if (async == 0) {
+		if (sock == -1) {
 #ifdef WIN32
-		WSADATA init;
-		const int ret = WSAStartup(WINSOCK_VERSION, &init);
+			WSADATA init;
+			const int ret = WSAStartup(WINSOCK_VERSION, &init);
 #endif
 
-		if((sock = openTcpSocket()) == -1)
-			return 0;
+			if ((sock = openTcpSocket()) == -1)
+				return 0;
+		}
+
+		receiveLoop(nullptr); // block until handshake is finished
 	}
-
-	handshakeFinished = false;
-
-	stopReceiving = 0;
-	receiveLoop(nullptr); // block until handshake is finished
 
 #ifdef WIN32
 	thread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)receiveLoop, nullptr, 0, NULL);
@@ -1785,6 +1825,14 @@ extern "C" int Captury_disconnect()
 	deleteActors();
 
 	return 1;
+}
+
+// returns 1 if successful, 0 otherwise
+extern "C" int Captury_getConnectionStatus()
+{
+	if (sock == -1)
+		return CAPTURY_DISCONNECTED;
+	return (handshakeFinished && stopReceiving == 0) ? CAPTURY_CONNECTED : CAPTURY_CONNECTING;
 }
 
 // returns the current number of actors
@@ -1903,6 +1951,11 @@ extern "C" int Captury_startStreamingImages(int what, int32_t camId)
 
 extern "C" int Captury_startStreamingImagesAndAngles(int what, int32_t camId, int numAngles, uint16_t* angles)
 {
+	streamWhat = what;
+	streamCamera = camId;
+	streamAngles.resize(numAngles);
+	memcpy(streamAngles.data(), angles, sizeof(uint16_t) * numAngles);
+
 	if (sock == -1)
 		return 0;
 
@@ -1914,10 +1967,6 @@ extern "C" int Captury_startStreamingImagesAndAngles(int what, int32_t camId, in
 	if (isThreadRunning)
 		Captury_stopStreaming();
 
-	streamWhat = what;
-	streamCamera = camId;
-	streamAngles.resize(numAngles);
-	memcpy(streamAngles.data(), angles, sizeof(uint16_t) * numAngles);
 	CapturyStreamPacket1Tcp* packet = (CapturyStreamPacket1Tcp*)malloc(sizeof(CapturyStreamPacketTcp) + (numAngles ? (2 + numAngles * 2) : 0));
 	packet->type = capturyStream;
 	packet->size = sizeof(CapturyStreamPacketTcp) + (numAngles ? (2 + numAngles * 2) : 0);
@@ -1961,13 +2010,11 @@ extern "C" int Captury_stopStreaming()
 	stopStreamThread = 1;
 
 #ifdef WIN32
-	WaitForSingleObject(thread, 1000);
+	WaitForSingleObject(thread, 10000);
 #else
 	void* retVal;
 	pthread_join(thread, &retVal);
 #endif
-
-	streamWhat = CAPTURY_STREAM_NOTHING;
 
 	return 1;
 }

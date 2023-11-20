@@ -21,10 +21,19 @@ extern "C" {
 CAPTURY_DLL_EXPORT int Captury_connect(const char* ip, unsigned short port);
 // in case you need to set the local port because of firewalls, etc.
 // use 0 for localPort and localStreamPort if you don't care
-CAPTURY_DLL_EXPORT int Captury_connect2(const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort);
+// if async != 0, the function will return immediately and perform the connection attempt asynchronously
+CAPTURY_DLL_EXPORT int Captury_connect2(const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort, int async);
 
 // returns 1 if successful, 0 otherwise
 CAPTURY_DLL_EXPORT int Captury_disconnect();
+
+#define CAPTURY_DISCONNECTED			0 // not connected
+#define CAPTURY_CONNECTING			1 // trying to connect
+#define CAPTURY_CONNECTED			2 // not connected
+// returns one of the above
+CAPTURY_DLL_EXPORT int Captury_getConnectionStatus();
+
+
 
 
 
