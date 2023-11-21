@@ -631,9 +631,8 @@ static void updateSync(uint64_t localT)
 	transitionEndLocalT = transitionStartLocalT + defaultTransitionTime;
 	double transitionStartRemoteT = (double)currentSync.getRemoteTime(localT);
 
+	oldSync = currentSync;
 	currentSync = tempSync;
-	oldSync.offset = transitionStartRemoteT;
-	oldSync.factor = currentSync.factor;
 
 	double delta = transitionStartRemoteT - currentSync.getRemoteTime(localT);
 	double factor = currentSync.factor;
@@ -2331,6 +2330,12 @@ extern "C" int64_t Captury_startRecording()
 
 	if (!sendPacket(&packet, capturyStartRecordingAck2))
 		return 0;
+
+	for (int i = 0; i < 100; ++i) {
+		sleepMicroSeconds(1000);
+		if (startRecordingTime != 0)
+			return startRecordingTime;
+	}
 
 	return startRecordingTime;
 }
