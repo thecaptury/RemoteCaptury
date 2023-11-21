@@ -71,7 +71,8 @@ typedef uint32_t uint;
 
 #ifdef WIN32
 
-static HANDLE		thread;
+static HANDLE		streamThread;
+static HANDLE		receiveThread;
 static HANDLE		syncThread;
 static CRITICAL_SECTION	mutex;
 static CRITICAL_SECTION	partialActorMutex;
@@ -95,7 +96,8 @@ static inline int setSocketTimeout(SOCKET sock, int timeout_ms)
 
 #define SOCKET		int
 #define closesocket	close
-static pthread_t	thread;
+static pthread_t	streamThread;
+static pthread_t	receiveThread;
 static pthread_t	syncThread;
 struct CAPABILITY("mutex") MutexStruct {
 	pthread_mutex_t	m;
@@ -241,7 +243,7 @@ static CapturyARTagCallback arTagCallback = NULL;
 static CapturyImageCallback imageCallback = NULL;
 
 static bool		handshakeFinished = false;
-static bool		isThreadRunning = false;
+static bool		isStreamThreadRunning = false;
 static SOCKET		sock = -1;
 
 static volatile int	stopStreamThread = 0; // stop streaming thread
@@ -1154,14 +1156,14 @@ static void* receiveLoop(void* arg)
 			if (sock == -1) {
 				deleteActors();
 
-				if (isThreadRunning) {
+				if (isStreamThreadRunning) {
 					stopStreamThread = 1;
 
 					#ifdef WIN32
-					WaitForSingleObject(thread, 10000);
+					WaitForSingleObject(streamThread, 10000);
 					#else
 					void* retVal;
-					pthread_join(thread, &retVal);
+					pthread_join(streamThread, &retVal);
 					#endif
 				}
 
@@ -1295,7 +1297,7 @@ static DWORD WINAPI streamLoop(void* arg)
 static void* streamLoop(void* arg)
 #endif
 {
-	isThreadRunning = true;
+	isStreamThreadRunning = true;
 
 	CapturyStreamPacketTcp* packet = (CapturyStreamPacketTcp*)arg;
 
@@ -1717,7 +1719,7 @@ static void* streamLoop(void* arg)
 
 	}
 
-	isThreadRunning = false;
+	isStreamThreadRunning = false;
 
 	closesocket(streamSock);
 
@@ -1786,9 +1788,9 @@ extern "C" int Captury_connect2(const char* ip, unsigned short port, unsigned sh
 	}
 
 #ifdef WIN32
-	thread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)receiveLoop, nullptr, 0, NULL);
+	receiveThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)receiveLoop, nullptr, 0, NULL);
 #else
-	pthread_create(&thread, NULL, receiveLoop, nullptr);
+	pthread_create(&receiveThread, NULL, receiveLoop, nullptr);
 #endif
 
 	return 1;
@@ -1815,10 +1817,12 @@ extern "C" int Captury_disconnect()
 #endif
 
 #ifdef WIN32
-	WaitForSingleObject(thread, 1000);
+	WaitForSingleObject(receiveThread, 1000);
+	WaitForSingleObject(streamThread, 1000);
 #else
 	void* retVal;
-	pthread_join(thread, &retVal);
+	pthread_join(receiveThread, &retVal);
+	pthread_join(streamThread, &retVal);
 #endif
 
 	deleteActors();
@@ -1963,7 +1967,7 @@ extern "C" int Captury_startStreamingImagesAndAngles(int what, int32_t camId, in
 	if (what == CAPTURY_STREAM_NOTHING)
 		return Captury_stopStreaming();
 
-	if (isThreadRunning)
+	if (isStreamThreadRunning)
 		Captury_stopStreaming();
 
 	CapturyStreamPacket1Tcp* packet = (CapturyStreamPacket1Tcp*)malloc(sizeof(CapturyStreamPacketTcp) + (numAngles ? (2 + numAngles * 2) : 0));
@@ -1992,9 +1996,9 @@ extern "C" int Captury_startStreamingImagesAndAngles(int what, int32_t camId, in
 
 	stopStreamThread = 0;
 #ifdef WIN32
-	thread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)streamLoop, packet, 0, NULL);
+	streamThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)streamLoop, packet, 0, NULL);
 #else
-	pthread_create(&thread, NULL, streamLoop, packet);
+	pthread_create(&streamThread, NULL, streamLoop, packet);
 #endif
 
 	return 1;
@@ -2009,10 +2013,10 @@ extern "C" int Captury_stopStreaming()
 	stopStreamThread = 1;
 
 #ifdef WIN32
-	WaitForSingleObject(thread, 10000);
+	WaitForSingleObject(streamThread, 10000);
 #else
 	void* retVal;
-	pthread_join(thread, &retVal);
+	pthread_join(streamThread, &retVal);
 #endif
 
 	return 1;
