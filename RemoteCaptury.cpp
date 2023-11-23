@@ -1847,25 +1847,12 @@ extern "C" int Captury_getActors(const CapturyActor** actrs)
 	actorPointers.clear();
 	actorPointers.reserve(actorsById.size());
 
-	std::vector<int> deleted;
 	int numActors = 0;
 	for (auto it : actorsById) {
 		if (actorData[it.first].status != ACTOR_DELETED) {
 			actorPointers.push_back(*it.second.get());
 			++numActors;
-		} else
-			deleted.push_back(it.first);
-	}
-
-	// house keeping
-	for (int id : deleted) {
-		log("deleting actor %s %x status %d\n", actorsById[id]->name, id, actorData[id].status);
-		delete[] actorsById[id]->joints;
-		actorsById.erase(id);
-		delete[] actorData[id].currentPose.transforms;
-		if (actorData[id].currentTextures.data != NULL)
-			free(actorData[id].currentTextures.data);
-		actorData.erase(id);
+		}
 	}
 
 	*actrs = (numActors == 0) ? NULL : const_cast<const CapturyActor*>(actorPointers.data());
