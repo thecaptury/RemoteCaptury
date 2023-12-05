@@ -775,23 +775,29 @@ static bool receive(SOCKET& sok)
 		}
 
 		if (p->size > (int)sizeof(CapturyRequestPacket)) {
-			size = recv(sok, buf + sizeof(CapturyRequestPacket), std::min<int>(p->size, sizeof(buf)) - sizeof(CapturyRequestPacket), 0);
-			if (size == 0) { // the other end shut down the socket...
-				log("socket shut down by other end: %s\n", sockstrerror());
-				closesocket(sok);
-				sok = -1;
-				return false;
-			}
-			if (size == -1) { // error
-				int err = sockerror();
-				log("socket error: %s\n", sockstrerror(err));
-				if (isSocketErrorFatal(err)) {
+			int at = sizeof(CapturyRequestPacket);
+			int toGet = std::min<int>(p->size, sizeof(buf)) - at;
+			while (toGet > 0) {
+				size = recv(sok, buf + at, toGet, 0);
+				if (size == 0) { // the other end shut down the socket...
+					log("socket shut down by other end: %s\n", sockstrerror());
 					closesocket(sok);
 					sok = -1;
+					return false;
 				}
-				return false;
+				if (size == -1) { // error
+					int err = sockerror();
+					log("socket error: %s\n", sockstrerror(err));
+					if (isSocketErrorFatal(err)) {
+						closesocket(sok);
+						sok = -1;
+					}
+					return false;
+				}
+				at += size;
+				toGet = std::min<int>(p->size, sizeof(buf)) - at;
 			}
-			size += sizeof(CapturyRequestPacket);
+			size = std::min<int>(p->size, sizeof(buf));
 		}
 
 		// log("received packet size %d type %d (expected %d)\n", size, p->type, expect);
@@ -1104,12 +1110,23 @@ static bool receive(SOCKET& sok)
 			CapturyTimePacket* srp = (CapturyTimePacket*)&buf[0];
 			startRecordingTime = srp->timestamp;
 			break; }
+		case capturyActorModeChanged: {
+			CapturyActorModeChangedPacket* amc = (CapturyActorModeChangedPacket*)&buf[0];
+			if (actorChangedCallback != NULL)
+				actorChangedCallback(amc->actor, amc->mode);
+			lockMutex(&mutex);
+			actorData[amc->actor].status = (CapturyActorStatus)amc->mode;
+			unlockMutex(&mutex);
+			break; }
 		case capturyStreamAck:
 		case capturySetShotAck:
 		case capturyStartRecordingAck:
 		case capturyStopRecordingAck:
 		case capturyCustomAck:
 			break; // all good
+		default:
+			log("unrecognized packet: %d bytes, type %d, size %d", size, p->type, p->size);
+			break;
 		}
 
 		// if (p->type == expect) {
@@ -1866,8 +1883,7 @@ extern "C" int Captury_getActors(const CapturyActor** actrs)
 	return numActors;
 }
 
-// returns the current number of actors
-// the array is owned by the library - do not free
+// returns the actor if found or NULL if not
 extern "C" const CapturyActor* Captury_getActor(int id)
 {
 	if (sock == -1)
