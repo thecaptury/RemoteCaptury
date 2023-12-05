@@ -143,6 +143,8 @@ static std::unordered_map<int, CapturyActor_p> actorsById GUARDED_BY(mutex);
 static std::unordered_map<int, CapturyActor_p> partialActors GUARDED_BY(partialActorMutex); // actors that have been received in part
 static std::vector<CapturyActor> actorPointers; // used by Captury_getActors()
 
+static std::unordered_map<int, std::vector<CapturyAngleData>> currentAngles;
+
 static int numCameras = -1;
 static std::vector<CapturyCamera> cameras;
 
@@ -153,7 +155,6 @@ static uint64_t dataAvailableTime;
 static uint64_t dataReceivedTime;
 static uint64_t mostRecentPoseReceivedTime; // time pose was received
 static uint64_t mostRecentPoseReceivedTimestamp; // timestamp of that pose
-
 
 const char* CapturyActorStatusString[] = {"scaling", "tracking", "stopped", "deleted", "unknown"};
 
@@ -1549,6 +1550,10 @@ static void* streamLoop(void* arg)
 			CapturyAnglesPacket* ang = (CapturyAnglesPacket*)&buf[0];
 			if (newAnglesCallback != NULL)
 				newAnglesCallback(Captury_getActor(ang->actor), ang->numAngles, ang->angles);
+			lockMutex(&mutex);
+			currentAngles[ang->actor].resize(ang->numAngles);
+			memcpy(currentAngles[ang->actor].data(), ang->angles, ang->numAngles * sizeof(CapturyAngleData));
+			unlockMutex(&mutex);
 			continue;
 		}
 
@@ -2080,6 +2085,19 @@ extern "C" CapturyPose* Captury_getCurrentPose(int actorId)
 {
 	int tc;
 	return Captury_getCurrentPoseAndTrackingConsistencyForActor(actorId, &tc);
+}
+
+extern "C" CapturyAngleData* Captury_getCurrentAngles(int actorId, int* numAngles)
+{
+	if (currentAngles.count(actorId)) {
+		if (numAngles != nullptr)
+			*numAngles = currentAngles[actorId].size();
+		return currentAngles[actorId].data();
+	} else {
+		if (numAngles != nullptr)
+			*numAngles = 0;
+		return nullptr;
+	}
 }
 
 extern "C" CapturyPose* Captury_getCurrentPoseAndTrackingConsistency(int actorId, int* tc)
