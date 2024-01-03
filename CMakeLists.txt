@@ -8,6 +8,9 @@ if (OpenMP_CXX_FLAGS)
 endif (OpenMP_CXX_FLAGS)
 
 project(RemoteCaptury)
+
+set (CMAKE_CXX_STANDARD 11)
+
 message(STATUS "working on remotecaptury library")
 include_directories(../include)
 add_library(RemoteCaptury SHARED RemoteCaptury.cpp)
