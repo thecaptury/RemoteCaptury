@@ -132,12 +132,21 @@ CAPTURY_DLL_EXPORT int Captury_startStreamingImagesAndAngles(int what, int32_t c
 // returns 1 if successful, 0 otherwise
 CAPTURY_DLL_EXPORT int Captury_stopStreaming();
 
+#pragma pack(push, 1)
+struct CapturyAngleData {
+	uint16_t type;
+	float value;
+};
+#pragma pack(pop)
+
 // fills the pose with the current pose for the given actor
 // returns the current pose. Captury_freePose() after use
 CAPTURY_DLL_EXPORT CapturyPose* Captury_getCurrentPoseForActor(int actorId);
 CAPTURY_DLL_EXPORT CapturyPose* Captury_getCurrentPoseAndTrackingConsistencyForActor(int actorId, int* tc);
 CAPTURY_DLL_EXPORT CapturyPose* Captury_getCurrentPose(int actorId);
 CAPTURY_DLL_EXPORT CapturyPose* Captury_getCurrentPoseAndTrackingConsistency(int actorId, int* tc);
+// *numAngles = number of angles returned
+CAPTURY_DLL_EXPORT CapturyAngleData* Captury_getCurrentAngles(int actorId, int* numAngles);
 
 // simple function for releasing memory of a pose
 CAPTURY_DLL_EXPORT void Captury_freePose(CapturyPose* pose);
@@ -149,13 +158,6 @@ typedef void (*CapturyNewPoseCallback)(CapturyActor*, CapturyPose*, int tracking
 // try to be quick in the callback
 // returns 1 if successful otherwise 0
 CAPTURY_DLL_EXPORT int Captury_registerNewPoseCallback(CapturyNewPoseCallback callback);
-
-#pragma pack(push, 1)
-struct CapturyAngleData {
-	uint16_t	type;
-	float		value;
-};
-#pragma pack(pop)
 
 typedef void (*CapturyNewAnglesCallback)(const CapturyActor*, int numAngles, struct CapturyAngleData* values);
 

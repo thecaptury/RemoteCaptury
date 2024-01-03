@@ -71,7 +71,8 @@ typedef uint32_t uint;
 
 #ifdef WIN32
 
-static HANDLE		thread;
+static HANDLE		streamThread;
+static HANDLE		receiveThread;
 static HANDLE		syncThread;
 static CRITICAL_SECTION	mutex;
 static CRITICAL_SECTION	partialActorMutex;
@@ -95,7 +96,8 @@ static inline int setSocketTimeout(SOCKET sock, int timeout_ms)
 
 #define SOCKET		int
 #define closesocket	close
-static pthread_t	thread;
+static pthread_t	streamThread;
+static pthread_t	receiveThread;
 static pthread_t	syncThread;
 struct CAPABILITY("mutex") MutexStruct {
 	pthread_mutex_t	m;
@@ -141,6 +143,8 @@ static std::unordered_map<int, CapturyActor_p> actorsById GUARDED_BY(mutex);
 static std::unordered_map<int, CapturyActor_p> partialActors GUARDED_BY(partialActorMutex); // actors that have been received in part
 static std::vector<CapturyActor> actorPointers; // used by Captury_getActors()
 
+static std::unordered_map<int, std::vector<CapturyAngleData>> currentAngles;
+
 static int numCameras = -1;
 static std::vector<CapturyCamera> cameras;
 
@@ -151,7 +155,6 @@ static uint64_t dataAvailableTime;
 static uint64_t dataReceivedTime;
 static uint64_t mostRecentPoseReceivedTime; // time pose was received
 static uint64_t mostRecentPoseReceivedTimestamp; // timestamp of that pose
-
 
 const char* CapturyActorStatusString[] = {"scaling", "tracking", "stopped", "deleted", "unknown"};
 
@@ -241,7 +244,7 @@ static CapturyARTagCallback arTagCallback = NULL;
 static CapturyImageCallback imageCallback = NULL;
 
 static bool		handshakeFinished = false;
-static bool		isThreadRunning = false;
+static bool		isStreamThreadRunning = false;
 static SOCKET		sock = -1;
 
 static volatile int	stopStreamThread = 0; // stop streaming thread
@@ -772,23 +775,29 @@ static bool receive(SOCKET& sok)
 		}
 
 		if (p->size > (int)sizeof(CapturyRequestPacket)) {
-			size = recv(sok, buf + sizeof(CapturyRequestPacket), std::min<int>(p->size, sizeof(buf)) - sizeof(CapturyRequestPacket), 0);
-			if (size == 0) { // the other end shut down the socket...
-				log("socket shut down by other end: %s\n", sockstrerror());
-				closesocket(sok);
-				sok = -1;
-				return false;
-			}
-			if (size == -1) { // error
-				int err = sockerror();
-				log("socket error: %s\n", sockstrerror(err));
-				if (isSocketErrorFatal(err)) {
+			int at = sizeof(CapturyRequestPacket);
+			int toGet = std::min<int>(p->size, sizeof(buf)) - at;
+			while (toGet > 0) {
+				size = recv(sok, buf + at, toGet, 0);
+				if (size == 0) { // the other end shut down the socket...
+					log("socket shut down by other end: %s\n", sockstrerror());
 					closesocket(sok);
 					sok = -1;
+					return false;
 				}
-				return false;
+				if (size == -1) { // error
+					int err = sockerror();
+					log("socket error: %s\n", sockstrerror(err));
+					if (isSocketErrorFatal(err)) {
+						closesocket(sok);
+						sok = -1;
+					}
+					return false;
+				}
+				at += size;
+				toGet = std::min<int>(p->size, sizeof(buf)) - at;
 			}
-			size += sizeof(CapturyRequestPacket);
+			size = std::min<int>(p->size, sizeof(buf));
 		}
 
 		// log("received packet size %d type %d (expected %d)\n", size, p->type, expect);
@@ -1101,12 +1110,23 @@ static bool receive(SOCKET& sok)
 			CapturyTimePacket* srp = (CapturyTimePacket*)&buf[0];
 			startRecordingTime = srp->timestamp;
 			break; }
+		case capturyActorModeChanged: {
+			CapturyActorModeChangedPacket* amc = (CapturyActorModeChangedPacket*)&buf[0];
+			if (actorChangedCallback != NULL)
+				actorChangedCallback(amc->actor, amc->mode);
+			lockMutex(&mutex);
+			actorData[amc->actor].status = (CapturyActorStatus)amc->mode;
+			unlockMutex(&mutex);
+			break; }
 		case capturyStreamAck:
 		case capturySetShotAck:
 		case capturyStartRecordingAck:
 		case capturyStopRecordingAck:
 		case capturyCustomAck:
 			break; // all good
+		default:
+			log("unrecognized packet: %d bytes, type %d, size %d", size, p->type, p->size);
+			break;
 		}
 
 		// if (p->type == expect) {
@@ -1154,14 +1174,14 @@ static void* receiveLoop(void* arg)
 			if (sock == -1) {
 				deleteActors();
 
-				if (isThreadRunning) {
+				if (isStreamThreadRunning) {
 					stopStreamThread = 1;
 
 					#ifdef WIN32
-					WaitForSingleObject(thread, 10000);
+					WaitForSingleObject(streamThread, 10000);
 					#else
 					void* retVal;
-					pthread_join(thread, &retVal);
+					pthread_join(streamThread, &retVal);
 					#endif
 				}
 
@@ -1295,7 +1315,7 @@ static DWORD WINAPI streamLoop(void* arg)
 static void* streamLoop(void* arg)
 #endif
 {
-	isThreadRunning = true;
+	isStreamThreadRunning = true;
 
 	CapturyStreamPacketTcp* packet = (CapturyStreamPacketTcp*)arg;
 
@@ -1547,6 +1567,10 @@ static void* streamLoop(void* arg)
 			CapturyAnglesPacket* ang = (CapturyAnglesPacket*)&buf[0];
 			if (newAnglesCallback != NULL)
 				newAnglesCallback(Captury_getActor(ang->actor), ang->numAngles, ang->angles);
+			lockMutex(&mutex);
+			currentAngles[ang->actor].resize(ang->numAngles);
+			memcpy(currentAngles[ang->actor].data(), ang->angles, ang->numAngles * sizeof(CapturyAngleData));
+			unlockMutex(&mutex);
 			continue;
 		}
 
@@ -1717,7 +1741,7 @@ static void* streamLoop(void* arg)
 
 	}
 
-	isThreadRunning = false;
+	isStreamThreadRunning = false;
 
 	closesocket(streamSock);
 
@@ -1786,9 +1810,9 @@ extern "C" int Captury_connect2(const char* ip, unsigned short port, unsigned sh
 	}
 
 #ifdef WIN32
-	thread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)receiveLoop, nullptr, 0, NULL);
+	receiveThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)receiveLoop, nullptr, 0, NULL);
 #else
-	pthread_create(&thread, NULL, receiveLoop, nullptr);
+	pthread_create(&receiveThread, NULL, receiveLoop, nullptr);
 #endif
 
 	return 1;
@@ -1815,10 +1839,12 @@ extern "C" int Captury_disconnect()
 #endif
 
 #ifdef WIN32
-	WaitForSingleObject(thread, 1000);
+	WaitForSingleObject(receiveThread, 1000);
+	WaitForSingleObject(streamThread, 1000);
 #else
 	void* retVal;
-	pthread_join(thread, &retVal);
+	pthread_join(receiveThread, &retVal);
+	pthread_join(streamThread, &retVal);
 #endif
 
 	deleteActors();
@@ -1843,25 +1869,12 @@ extern "C" int Captury_getActors(const CapturyActor** actrs)
 	actorPointers.clear();
 	actorPointers.reserve(actorsById.size());
 
-	std::vector<int> deleted;
 	int numActors = 0;
 	for (auto it : actorsById) {
 		if (actorData[it.first].status != ACTOR_DELETED) {
 			actorPointers.push_back(*it.second.get());
 			++numActors;
-		} else
-			deleted.push_back(it.first);
-	}
-
-	// house keeping
-	for (int id : deleted) {
-		log("deleting actor %s %x status %d\n", actorsById[id]->name, id, actorData[id].status);
-		delete[] actorsById[id]->joints;
-		actorsById.erase(id);
-		delete[] actorData[id].currentPose.transforms;
-		if (actorData[id].currentTextures.data != NULL)
-			free(actorData[id].currentTextures.data);
-		actorData.erase(id);
+		}
 	}
 
 	*actrs = (numActors == 0) ? NULL : const_cast<const CapturyActor*>(actorPointers.data());
@@ -1870,8 +1883,7 @@ extern "C" int Captury_getActors(const CapturyActor** actrs)
 	return numActors;
 }
 
-// returns the current number of actors
-// the array is owned by the library - do not free
+// returns the actor if found or NULL if not
 extern "C" const CapturyActor* Captury_getActor(int id)
 {
 	if (sock == -1)
@@ -1963,7 +1975,7 @@ extern "C" int Captury_startStreamingImagesAndAngles(int what, int32_t camId, in
 	if (what == CAPTURY_STREAM_NOTHING)
 		return Captury_stopStreaming();
 
-	if (isThreadRunning)
+	if (isStreamThreadRunning)
 		Captury_stopStreaming();
 
 	CapturyStreamPacket1Tcp* packet = (CapturyStreamPacket1Tcp*)malloc(sizeof(CapturyStreamPacketTcp) + (numAngles ? (2 + numAngles * 2) : 0));
@@ -1992,9 +2004,9 @@ extern "C" int Captury_startStreamingImagesAndAngles(int what, int32_t camId, in
 
 	stopStreamThread = 0;
 #ifdef WIN32
-	thread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)streamLoop, packet, 0, NULL);
+	streamThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)streamLoop, packet, 0, NULL);
 #else
-	pthread_create(&thread, NULL, streamLoop, packet);
+	pthread_create(&streamThread, NULL, streamLoop, packet);
 #endif
 
 	return 1;
@@ -2009,10 +2021,10 @@ extern "C" int Captury_stopStreaming()
 	stopStreamThread = 1;
 
 #ifdef WIN32
-	WaitForSingleObject(thread, 10000);
+	WaitForSingleObject(streamThread, 10000);
 #else
 	void* retVal;
-	pthread_join(thread, &retVal);
+	pthread_join(streamThread, &retVal);
 #endif
 
 	return 1;
@@ -2089,6 +2101,19 @@ extern "C" CapturyPose* Captury_getCurrentPose(int actorId)
 {
 	int tc;
 	return Captury_getCurrentPoseAndTrackingConsistencyForActor(actorId, &tc);
+}
+
+extern "C" CapturyAngleData* Captury_getCurrentAngles(int actorId, int* numAngles)
+{
+	if (currentAngles.count(actorId)) {
+		if (numAngles != nullptr)
+			*numAngles = currentAngles[actorId].size();
+		return currentAngles[actorId].data();
+	} else {
+		if (numAngles != nullptr)
+			*numAngles = 0;
+		return nullptr;
+	}
 }
 
 extern "C" CapturyPose* Captury_getCurrentPoseAndTrackingConsistency(int actorId, int* tc)
