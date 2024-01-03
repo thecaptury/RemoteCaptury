@@ -40,7 +40,12 @@ if (TARGET Python3::Python)
 				SUFFIX ".pyd"
 				FOLDER "plugins"
 		)
-	endif (WIN32)
+	elseif (APPLE)
+		set_target_properties(RemoteCapturyPython
+			PROPERTIES
+				SUFFIX ".so"
+		)
+	endif ()
 endif (TARGET Python3::Python)
 
 if (ANDROID_NDK_FOUND)
