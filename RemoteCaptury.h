@@ -130,7 +130,7 @@ CAPTURY_DLL_EXPORT int Captury_startStreamingImagesAndAngles(int what, int32_t c
 
 // equivalent to Captury_startStreaming(CAPTURY_STREAM_NOTHING)
 // returns 1 if successful, 0 otherwise
-CAPTURY_DLL_EXPORT int Captury_stopStreaming();
+CAPTURY_DLL_EXPORT int Captury_stopStreaming(int wait = 1);
 
 #pragma pack(push, 1)
 struct CapturyAngleData {

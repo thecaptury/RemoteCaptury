@@ -707,7 +707,7 @@ static bool isSocketErrorFatal(int err)
 static bool isSocketErrorTryAgain(int err)
 {
 #ifdef WIN32
-	return (err == WSAEINTR || err == WSAETIMEDOUT || err == WSAEWOULDBLOCK || err == WSAEINPROGRESS);
+	return (err == WSAEINTR || err == WSAETIMEDOUT || err == WSAEWOULDBLOCK || err == WSAEINPROGRESS || err == 0);
 #else
 	return (err == EAGAIN || err == EBUSY || err == EINTR);
 #endif
@@ -759,7 +759,7 @@ static bool receive(SOCKET& sok)
 		// first peek to find out which packet type this is
 		int size = recv(sok, buf, sizeof(CapturyRequestPacket), 0);
 		if (size == 0) { // the other end shut down the socket...
-			log("socket shut down by other end: %s\n", sockstrerror());
+			log("socket shut down by other end %s\n", sockstrerror());
 			closesocket(sok);
 			sok = -1;
 			return false;
@@ -1178,7 +1178,7 @@ static void* receiveLoop(void* arg)
 					stopStreamThread = 1;
 
 					#ifdef WIN32
-					WaitForSingleObject(streamThread, 10000);
+					WaitForSingleObject(streamThread, 1000);
 					#else
 					void* retVal;
 					pthread_join(streamThread, &retVal);
@@ -1340,6 +1340,10 @@ static void* streamLoop(void* arg)
 		return 0;
 	}
 
+	int sockBufSize = 500000;
+	socklen_t optSize = sizeof(sockBufSize);
+	getsockopt(streamSock, SOL_SOCKET, SO_RCVBUF, (char*)&sockBufSize, &optSize);
+
 	// set read timeout
 	setSocketTimeout(streamSock, 100);
 
@@ -1402,8 +1406,16 @@ static void* streamLoop(void* arg)
 		}
 		if (size == -1) { // error
 			int err = sockerror();
-			if (isSocketErrorTryAgain(err))
+			if (isSocketErrorTryAgain(err)) {
+				#ifdef WIN32
+				if (err == 0) {
+					u_long read;
+					ioctlsocket(streamSock, FIONREAD, &read); // returns fill status of socket buffer...
+					log("socket filled %.1f%%", (read * 100.0f) / sockBufSize);
+				}
+				#endif
 				continue;
+			}
 			char buff[200];
 			sprintf(buff, "Stream socket error: %s", sockstrerror(err));
 			lastErrorMessage = buff;
@@ -1569,7 +1581,8 @@ static void* streamLoop(void* arg)
 				newAnglesCallback(Captury_getActor(ang->actor), ang->numAngles, ang->angles);
 			lockMutex(&mutex);
 			currentAngles[ang->actor].resize(ang->numAngles);
-			memcpy(currentAngles[ang->actor].data(), ang->angles, ang->numAngles * sizeof(CapturyAngleData));
+			for (int i = 0; i < ang->numAngles; ++i)
+				currentAngles[ang->actor][i] = *(CapturyAngleData*)((char*)ang->angles + sizeof(CapturyAngleData) * i);
 			unlockMutex(&mutex);
 			continue;
 		}
@@ -2013,19 +2026,21 @@ extern "C" int Captury_startStreamingImagesAndAngles(int what, int32_t camId, in
 }
 
 // returns 1 if successful, 0 otherwise
-extern "C" int Captury_stopStreaming()
+extern "C" int Captury_stopStreaming(int wait)
 {
 	if (sock == -1)
 		return 0;
 
 	stopStreamThread = 1;
 
+	if (wait) {
 #ifdef WIN32
-	WaitForSingleObject(streamThread, 10000);
+		WaitForSingleObject(streamThread, 1000);
 #else
-	void* retVal;
-	pthread_join(streamThread, &retVal);
+		void* retVal;
+		pthread_join(streamThread, &retVal);
 #endif
+	}
 
 	return 1;
 }
@@ -2107,7 +2122,7 @@ extern "C" CapturyAngleData* Captury_getCurrentAngles(int actorId, int* numAngle
 {
 	if (currentAngles.count(actorId)) {
 		if (numAngles != nullptr)
-			*numAngles = currentAngles[actorId].size();
+			*numAngles = (int)currentAngles[actorId].size();
 		return currentAngles[actorId].data();
 	} else {
 		if (numAngles != nullptr)
