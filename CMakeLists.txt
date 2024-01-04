@@ -8,6 +8,9 @@ if (OpenMP_CXX_FLAGS)
 endif (OpenMP_CXX_FLAGS)
 
 project(RemoteCaptury)
+
+set (CMAKE_CXX_STANDARD 11)
+
 message(STATUS "working on remotecaptury library")
 include_directories(../include)
 add_library(RemoteCaptury SHARED RemoteCaptury.cpp)
@@ -40,7 +43,12 @@ if (TARGET Python3::Python)
 				SUFFIX ".pyd"
 				FOLDER "plugins"
 		)
-	endif (WIN32)
+	elseif (APPLE)
+		set_target_properties(RemoteCapturyPython
+			PROPERTIES
+				SUFFIX ".so"
+		)
+	endif ()
 endif (TARGET Python3::Python)
 
 if (ANDROID_NDK_FOUND)
