@@ -92,6 +92,8 @@ static inline int setSocketTimeout(SOCKET sock, int timeout_ms)
 	return setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
 }
 
+static bool wsaInited = false;
+
 #else
 
 #define SOCKET		int
@@ -1816,8 +1818,11 @@ extern "C" int Captury_connect2(const char* ip, unsigned short port, unsigned sh
 	if (async == 0) {
 		if (sock == -1) {
 #ifdef WIN32
-			WSADATA init;
-			const int ret = WSAStartup(WINSOCK_VERSION, &init);
+			if (!wsaInited) {
+				WSADATA init;
+				const int ret = WSAStartup(WINSOCK_VERSION, &init);
+				wsaInited = true;
+			}
 #endif
 
 			if ((sock = openTcpSocket()) == -1)
@@ -1853,7 +1858,10 @@ extern "C" int Captury_disconnect()
 	stopStreamThread = 1;
 
 #ifdef WIN32
-	WSACleanup();
+	if (wsaInited) {
+		WSACleanup();
+		wsaInited = false;
+	}
 #endif
 
 #ifdef WIN32
