@@ -138,13 +138,6 @@ static std::string currentDay;
 static std::string currentSession;
 static std::string currentShot;
 
-struct CapturyActor_Deleter {
-	void operator()(CapturyActor* actor) {
-		delete[] actor->joints;
-		delete actor;
-	}
-};
-
 typedef std::shared_ptr<CapturyActor> CapturyActor_p;
 
 // actor id -> pointer to actor
@@ -838,7 +831,7 @@ static bool receive(SOCKET& sok)
 		case capturyActor:
 		case capturyActor2:
 		case capturyActor3: {
-			CapturyActor_p actor(new CapturyActor, CapturyActor_Deleter{});
+			CapturyActor_p actor(new CapturyActor);
 			CapturyActorPacket* cap = (CapturyActorPacket*)&buf[0];
 			strncpy(actor->name, cap->name, sizeof(actor->name));
 			actor->id = cap->id;
@@ -1153,6 +1146,8 @@ static void deleteActors()
 {
 	log("deleting all actors\n");
 	lockMutex(&mutex);
+	for (auto it : actorsById)
+		delete[] it.second->joints;
 	actorsById.clear();
 
 	std::unordered_map<int, ActorData>::iterator it;
