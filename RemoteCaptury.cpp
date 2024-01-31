@@ -17,7 +17,7 @@
 
 #include <stdlib.h>
 #include <stdio.h>
-#define MAX(a, b) ((a) > (b) ? (a) : (b))
+// #define MAXIMUM(a, b) ((a) > (b) ? (a) : (b))
 #ifdef WIN32
 #undef max
 #undef min
@@ -1383,7 +1383,7 @@ static void* streamLoop(void* arg)
 
 		tv.tv_sec = 0;
 		tv.tv_usec = 500000; // 0.5s = 2Hz
-		int ret = select((int)(MAX(sock, streamSock)+1), &reader, NULL, NULL, &tv);
+		int ret = select((int)(MAXIMUM(sock, streamSock)+1), &reader, NULL, NULL, &tv);
 		if (ret == -1) { // error
 			log("error waiting for stream socket\n");
 			lastErrorMessage = "Error waiting for stream socket";
