@@ -500,6 +500,8 @@ const char* Captury_getHumanReadableMessageType(CapturyPacketTypes type)
 		return "<start recording ack 2>";
 	case capturyHello:
 		return "<hello>";
+	case capturyActorBlendShapes:
+		return "<actor blend shapes>";
 	case capturyError:
 		return "<error>";
 	}
@@ -988,6 +990,21 @@ static bool receive(SOCKET& sok)
 			}
 			log("received actor cont %d (%d/%d)\n", actor->id, j, actor->numJoints);
 			break; }
+		case capturyActorBlendShapes: {
+			CapturyActorBlendShapesPacket* cabs = (CapturyActorBlendShapesPacket*)&buf[0];
+			lockMutex(&mutex);
+			std::shared_ptr<CapturyActor> actor = actorsById[actor->id];
+			actor->numBlendShapes = cabs->numBlendShapes;
+			if (actor->blendShapes != nullptr)
+				delete[] actor->blendShapes;
+			actor->blendShapes = new CapturyBlendShape[actor->numBlendShapes];
+			char* at = cabs->blendShapeNames;
+			for (int i = 0; i < actor->numBlendShapes; ++i) {
+				strncpy(actor->blendShapes[i].name, at, 64);
+				at += std::min<int>(strlen(actor->blendShapes[i].name) + 1, 64);
+			}
+			unlockMutex(&mutex);
+			break; }
 		case capturyCamera: {
 			CapturyCamera camera;
 			CapturyCameraPacket* ccp = (CapturyCameraPacket*)&buf[0];
@@ -1262,12 +1279,12 @@ static void receivedPose(CapturyPose* pose, int actorId, ActorData* aData, uint6
 	}
 }
 
-static void decompressPose(const float* values, float* copyTo, uint8_t* v, int numJoints, CapturyActor* actor, bool first)
+static void decompressPose(CapturyPose* pose, uint8_t* v, CapturyActor* actor)
 {
-	for (int i = 0; i < numJoints; ++i) {
-		if (i == 0 && first) {
-			first = false;
-
+	float* copyTo = (float*)pose->transforms;
+	float* values = (float*)pose->transforms;
+	for (int i = 0; i < actor->numJoints; ++i) {
+		if (i == 0) {
 			int32_t t = v[0] | (v[1] << 8) | (v[2] << 16);
 			if ((t & 0x800000) != 0)
 				t |= 0xFF000000;
@@ -1309,6 +1326,9 @@ static void decompressPose(const float* values, float* copyTo, uint8_t* v, int n
 		copyTo[5] = ((rall & 0xFFC00000) >> 22) * (180.0f / 1023);
 		copyTo += 6;
 	}
+
+	for (int i = 0; i < actor->numBlendShapes; ++i, v += 2)
+		pose->blendShapeActivations[i] = (*(uint16_t*)v) / 32768.0f;
 }
 
 #ifdef WIN32
@@ -1627,26 +1647,26 @@ static void* streamLoop(void* arg)
 			CapturyPoseCont* cpc = (CapturyPoseCont*)cpp;
 
 			int numBytesToCopy = size - (int)((char*)cpc->values - (char*)cpc);
-			int totalBytes = actorsById[cpp->actor]->numJoints * sizeof(float) * 6;
+			int numJoints = actorsById[cpp->actor]->numJoints;
+			int numBlendShapes = actorsById[cpp->actor]->numBlendShapes;
+			int totalBytes = (numJoints * 6 + numBlendShapes) * sizeof(float);
 			if (aData.inProgress[inProgressIndex].bytesDone + numBytesToCopy > totalBytes) {
 				lastErrorMessage = "pose continuation too large";
 				unlockMutex(&mutex);
 				continue;
 			}
 
-			if (cpp->type == capturyPoseCont) {
-				char* at = ((char*)aData.inProgress[inProgressIndex].pose) + aData.inProgress[inProgressIndex].bytesDone / 6 * sizeof(CapturyTransform);
-				for (int i = 0; i < numBytesToCopy; i += 6, at += sizeof(CapturyTransform)) {
-					memcpy(at, cpc->values + i, 6*sizeof(float));
-					cpc->values[i + 6 + 0] = 1.0f;
-					cpc->values[i + 6 + 1] = 1.0f;
-					cpc->values[i + 6 + 2] = 1.0f;
-				}
-			} else
-				decompressPose(aData.inProgress[inProgressIndex].pose, (float*)(((char*)aData.inProgress[inProgressIndex].pose) + aData.inProgress[inProgressIndex].bytesDone), (uint8_t*)cpc->values, numBytesToCopy / 10, actorsById[cpp->actor].get(), false);
+			char* at = ((char*)aData.inProgress[inProgressIndex].pose) + aData.inProgress[inProgressIndex].bytesDone;
+			memcpy(at, cpc->values, numBytesToCopy);
 			aData.inProgress[inProgressIndex].bytesDone += numBytesToCopy;
+
 			if (aData.inProgress[inProgressIndex].bytesDone == totalBytes) {
-				memcpy(aData.currentPose.transforms, aData.inProgress[inProgressIndex].pose, totalBytes);
+				if (cpp->type == capturyCompressedPoseCont)
+					decompressPose(&aData.currentPose, (uint8_t*)aData.inProgress[inProgressIndex].pose, actorsById[cpp->actor].get());
+				else {
+					memcpy(aData.currentPose.transforms, aData.inProgress[inProgressIndex].pose, numJoints * 6 * sizeof(float));
+					memcpy(aData.currentPose.blendShapeActivations, aData.inProgress[inProgressIndex].pose + numJoints * 6 * sizeof(float), numBlendShapes * sizeof(float));
+				}
 				receivedPose(&aData.currentPose, cpc->actor, &actorData[cpc->actor], aData.inProgress[inProgressIndex].timestamp);
 			}
 			unlockMutex(&mutex);
@@ -1697,18 +1717,23 @@ static void* streamLoop(void* arg)
 			at = (int)((char*)(((CapturyPosePacket2*)cpp)->values) - (char*)cpp);
 		}
 
-		if (actorsById.count(cpp->actor) != 0 && actorsById[cpp->actor]->numJoints * 6 != numValues) {
-			log("expected %d dofs, got %d\n", actorsById[cpp->actor]->numJoints * 6, numValues);
+		if (actorsById.count(cpp->actor) != 0 && actorsById[cpp->actor]->numJoints * 6 + actorsById[cpp->actor]->numBlendShapes != numValues) {
+			log("expected %d+%d dofs, got %d\n", actorsById[cpp->actor]->numJoints * 6, actorsById[cpp->actor]->numBlendShapes, numValues);
 			unlockMutex(&mutex);
 			continue;
 		}
 
+		int numTransforms = std::min<int>(numValues / 6, actorsById[cpp->actor]->numJoints);
+		int numBlendShapes = std::min<int>(numValues - numTransforms*6, actorsById[cpp->actor]->numBlendShapes);
+
 		std::unordered_map<int, ActorData>::iterator it = actorData.find(cpp->actor);
-		if (it == actorData.end() || it->second.currentPose.numTransforms == 0) {
+		if (it == actorData.end() || (it->second.currentPose.numTransforms == 0 && it->second.currentPose.numBlendShapes == 0)) {
 			it = actorData.insert(std::make_pair(cpp->actor, ActorData())).first;
 			it->second.currentPose.actor = cpp->actor;
-			it->second.currentPose.numTransforms = numValues/6;
-			it->second.currentPose.transforms = new CapturyTransform[numValues/6];
+			it->second.currentPose.numTransforms = numTransforms;
+			it->second.currentPose.transforms = (numTransforms != 0) ? new CapturyTransform[numTransforms] : nullptr;
+			it->second.currentPose.numBlendShapes = numBlendShapes;
+			it->second.currentPose.blendShapeActivations = (numBlendShapes != 0) ? new float[numBlendShapes] : nullptr;
 		}
 
 		if (cpp->type == capturyPose2 || cpp->type == capturyCompressedPose2) {
@@ -1728,28 +1753,28 @@ static void* streamLoop(void* arg)
 		}
 
 		// either copy to currentPose or inProgress pose
-		int numBytesToCopy = sizeof(float) * numValues;
-		float* copyTo = it->second.currentPose.transforms[0].translation;
-		if (((cpp->type == capturyPose || cpp->type == capturyPose2) && at + numBytesToCopy > size) ||
-		    ((cpp->type == capturyCompressedPose || cpp->type == capturyCompressedPose2) && at + (numValues/6-1)*10 + 13 > size)) {
+		int numBytesToCopy = size - at;
+		bool done = false;
+		if ((cpp->type == capturyPose || cpp->type == capturyPose2) && numBytesToCopy == (numTransforms*6 + numBlendShapes)*sizeof(float)) {
+			if (numTransforms != 0)
+				memcpy(it->second.currentPose.transforms, values, numTransforms*6*sizeof(float));
+			if (numBlendShapes != 0)
+				memcpy(it->second.currentPose.blendShapeActivations, values + numTransforms*6, numBlendShapes*sizeof(float));
+			done = true;
+		} else if ((cpp->type == capturyCompressedPose || cpp->type == capturyCompressedPose2) && numBytesToCopy == (numTransforms-1)*10 + 13 + numBlendShapes * 2) {
+			decompressPose(&it->second.currentPose, (uint8_t*)values, actorsById[cpp->actor].get());
+			done = true;
+		} else {// partial
 			unlockMutex(&mutex);
-			numBytesToCopy = size - at;
-			it->second.inProgress[inProgressIndex].bytesDone = numBytesToCopy;
 			if (it->second.inProgress[inProgressIndex].pose == NULL)
 				it->second.inProgress[inProgressIndex].pose = new float[numValues];
-			copyTo = it->second.inProgress[inProgressIndex].pose;
+			memcpy(it->second.inProgress[inProgressIndex].pose, values, numBytesToCopy);
+			it->second.inProgress[inProgressIndex].bytesDone = numBytesToCopy;
 			it->second.inProgress[inProgressIndex].timestamp = cpp->timestamp;
 			lockMutex(&mutex);
 		}
 
-		if (cpp->type == capturyPose || cpp->type == capturyPose2) {
-			for (int i = 0; i < numBytesToCopy; i += 6 * sizeof(float), copyTo += 6, values += 6) {
-				memcpy(copyTo, values, 6 * sizeof(float));
-			}
-		} else // compressed
-			decompressPose(copyTo, copyTo, (uint8_t*)values, numValues / 6, actorsById[cpp->actor].get(), true);
-
-		if (numBytesToCopy == numValues * (int)sizeof(float))
+		if (done)
 			receivedPose(&it->second.currentPose, cpp->actor, &it->second, cpp->timestamp);
 
 		unlockMutex(&mutex);
@@ -2102,19 +2127,22 @@ extern "C" CapturyPose* Captury_getCurrentPoseAndTrackingConsistencyForActor(int
 		return NULL;
 	}
 
-	if (it->second.currentPose.numTransforms == 0) {
+	if (it->second.currentPose.numTransforms == 0 && it->second.currentPose.numBlendShapes == 0) {
 		unlockMutex(&mutex);
 		lastErrorMessage = "most recent pose is empty";
 		return NULL;
 	}
 
-	CapturyPose* pose = (CapturyPose*)malloc(sizeof(CapturyPose) + it->second.currentPose.numTransforms * sizeof(CapturyTransform));
+	CapturyPose* pose = (CapturyPose*)malloc(sizeof(CapturyPose) + it->second.currentPose.numTransforms * sizeof(CapturyTransform) + it->second.currentPose.numBlendShapes*sizeof(float));
 	pose->actor = actorId;
 	pose->timestamp = it->second.currentPose.timestamp;
 	pose->numTransforms = it->second.currentPose.numTransforms;
 	pose->transforms = (CapturyTransform*)&pose[1];
+	pose->numBlendShapes = it->second.currentPose.numBlendShapes;
+	pose->blendShapeActivations = (float*)(((CapturyTransform*)&pose[1]) + pose->numTransforms);
 
 	memcpy(pose->transforms, it->second.currentPose.transforms, sizeof(CapturyTransform) * pose->numTransforms);
+	memcpy(pose->blendShapeActivations, it->second.currentPose.blendShapeActivations, sizeof(float) * pose->numBlendShapes);
 	unlockMutex(&mutex);
 
 	return pose;

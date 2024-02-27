@@ -430,6 +430,7 @@ typedef enum { capturyActors = 1, capturyActor = 2,
 	       capturyAngles = 70,
 	       capturyStartRecording2 = 71, capturyStartRecordingAck2 = 72,
 	       capturyHello = 73, // handshake finished
+	       capturyActorBlendShapes = 74,
 	       capturyError = 0 } CapturyPacketTypes;
 
 // returns a string for nicer error messages
@@ -491,6 +492,17 @@ struct CapturyActorPacket {
 	int32_t		id;
 	int32_t		numJoints;
 	CapturyJointPacket	joints[];
+};
+
+// sent to client
+// as a reply to CapturyRequestPacket = capturyActors
+struct CapturyActorBlendShapesPacket {
+	int32_t		type;		// capturyActorBlendShapes
+	int32_t		size;		// size of full message including type and size
+
+	int32_t		actorId;
+	int32_t		numBlendShapes;
+	char		blendShapeNames[];
 };
 
 // sent to client
