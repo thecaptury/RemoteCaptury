@@ -993,10 +993,8 @@ static bool receive(SOCKET& sok)
 		case capturyActorBlendShapes: {
 			CapturyActorBlendShapesPacket* cabs = (CapturyActorBlendShapesPacket*)&buf[0];
 			lockMutex(&mutex);
-			std::shared_ptr<CapturyActor> actor = actorsById[actor->id];
+			std::shared_ptr<CapturyActor> actor = actorsById[cabs->actorId];
 			actor->numBlendShapes = cabs->numBlendShapes;
-			if (actor->blendShapes != nullptr)
-				delete[] actor->blendShapes;
 			actor->blendShapes = new CapturyBlendShape[actor->numBlendShapes];
 			char* at = cabs->blendShapeNames;
 			for (int i = 0; i < actor->numBlendShapes; ++i) {
@@ -1283,7 +1281,8 @@ static void decompressPose(CapturyPose* pose, uint8_t* v, CapturyActor* actor)
 {
 	float* copyTo = (float*)pose->transforms;
 	float* values = (float*)pose->transforms;
-	for (int i = 0; i < actor->numJoints; ++i) {
+	int numJoints = (actor->numJoints < pose->numTransforms) ? actor->numJoints : pose->numTransforms;
+	for (int i = 0; i < numJoints; ++i) {
 		if (i == 0) {
 			int32_t t = v[0] | (v[1] << 8) | (v[2] << 16);
 			if ((t & 0x800000) != 0)
