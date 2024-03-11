@@ -882,6 +882,7 @@ static bool receive(SOCKET& sok)
 				}
 				numTransmittedJoints = j + 1;
 			}
+			actor->numBlendShapes = 0;
 			/*int numTransmittedJoints = std::min<int>((cap->size - sizeof(CapturyActorPacket)) / sizeof(CapturyJointPacket), actor->numJoints);
 			for (int j = 0; j < numTransmittedJoints; ++j) {
 				strcpy(actor->joints[j].name, cap->joints[j].name);
