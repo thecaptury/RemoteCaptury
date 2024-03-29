@@ -267,6 +267,7 @@ static void*					backgroundFinishedCallbackUserData = NULL;
 static int64_t				startRecordingTime = 0;
 
 static bool				doPrintf = true;
+static bool				doRemoteLogging = false;
 static std::list<std::string>		logs;
 
 #ifndef WIN32
@@ -314,26 +315,39 @@ static inline void unlockMutex(MutexStruct* mtx) RELEASE(mtx)
 
 static void log(const char* format, ...)
 {
-	char buffer[500];
+	char buffer[509];
 	va_list args;
 	va_start(args, format);
-	vsnprintf(buffer, 500, format, args);
+	vsnprintf(buffer+9, 500, format, args);
 	va_end(args);
 
 	if (doPrintf)
-		printf("%s", buffer);
+		printf("%s", buffer+9);
 
 	lockMutex(&logMutex);
-	logs.emplace_back(buffer);
+	logs.emplace_back(buffer+9);
 
 	if (logs.size() > 100000)
 		logs.pop_front();
 	unlockMutex(&logMutex);
+
+	if (doRemoteLogging && sock != -1) {
+		CapturyLogPacket* lp = (CapturyLogPacket*)buffer;
+		lp->type = capturyMessage;
+		lp->size = 9 + strlen(buffer+9) + 1;
+		lp->logLevel = CAPTURY_LOG_INFO;
+		send(sock, lp, lp->size, 0);
+	}
 }
 
 void Captury_enablePrintf(int on)
 {
 	doPrintf = (on != 0);
+}
+
+void Captury_enableRemoteLogging(int on)
+{
+	doRemoteLogging = (on != 0);
 }
 
 const char* Captury_getNextLogMessage()
@@ -502,6 +516,12 @@ const char* Captury_getHumanReadableMessageType(CapturyPacketTypes type)
 		return "<hello>";
 	case capturyActorBlendShapes:
 		return "<actor blend shapes>";
+	case capturyMessage:
+		return "<message>";
+	case capturyEnableRemoteLogging:
+		return "<enable remote logging>";
+	case capturyDisableRemoteLogging:
+		return "<enable remote logging>";
 	case capturyError:
 		return "<error>";
 	}
@@ -566,17 +586,25 @@ static uint64_t getTime()
 // the naive approach of estimating the parameters directly with a linear system fails
 // because of numerical instability. that's why we first subtract mean/median and then
 // solve the following:
+// note that the median(r-l) is necessary because the remote time measurement is noisy
+// local time measurement is relatively smooth. so using the mean is sufficient.
 //
 // b = r - l - median(r-l)
 // a = l - mean(l)
 // a * f = b
 // f = a \ b                                    <=>
-// f = (a . b) / sum(a.^2)      <- least squares solution
+// f = dot(a, b) / dot(a, a)      <- least squares solution
 // (l - mean(l)) * f = b                        <=>
 // (l - mean(l)) * f = r - l - median(r-l)      <=>
 // (l - mean(l)) * f + l + median(r-l) = r      <=>
 // (l - mean(l)) * f + l + median(r-l) = r      <=>
 // l * (f + 1) + median(r-l) - mean(l) * f = r
+//     \_____/   \_______________________/
+//      factor             offset
+//
+// note that for extra efficiency all operations except for the division in the
+// least squares solution and the multiplication in the last line can be performed as
+// integer operations.
 //
 // if there are only a few samples we cannot estimate the slope f accurately. so we
 // just estimate an offset (the median of the time differences between remote and local)
@@ -606,14 +634,15 @@ void computeSync(Sync& s)
 		s.offset = medianOffset;
 		s.factor = 0.0;
 		meanLocalT /= num;
-		double sumAsqr = 0.0;
+		int64_t sumAsqr = 0;
+		int64_t sumAB = 0;
 		for (SyncSample& ss : syncSamples) {
-			double a = ss.localT - meanLocalT;
+			int64_t a = ss.localT - meanLocalT;
 			sumAsqr += a*a;
-			double b = ss.remoteT - ss.localT - medianOffset;
-			s.factor += a*b;
+			int64_t b = ss.remoteT - ss.localT - medianOffset;
+			sumAB += a*b;
 		}
-		s.factor /= sumAsqr;
+		s.factor = sumAB / (double)sumAsqr;
 		s.offset -= meanLocalT * s.factor;
 		s.factor += 1.0;
 		log("sync based on %d samples: offset %15f, factor %.15f (mlt %15f, moff %15f)\n", num, s.offset, s.factor, meanLocalT, medianOffset);
@@ -721,8 +750,8 @@ static bool isSocketErrorTryAgain(int err)
 // returns false if the expected packet is not received
 static bool receive(SOCKET& sok)
 {
-	char buf[9000];
-	CapturyRequestPacket* p = (CapturyRequestPacket*) &buf[0];
+	static std::vector<char> buffer(9000);
+	CapturyRequestPacket* p = (CapturyRequestPacket*)buffer.data();
 
 	{
 		fd_set reader;
@@ -751,17 +780,10 @@ static bool receive(SOCKET& sok)
 			struct sockaddr_in thisEnd;
 			socklen_t len = sizeof(thisEnd);
  			getsockname(sok, (sockaddr*) &thisEnd, &len);
-
-// #ifdef WIN32
-// 			log("Stream receiving on %d.%d.%d.%d:%d\n", thisEnd.sin_addr.S_un.S_un_b.s_b1, thisEnd.sin_addr.S_un.S_un_b.s_b2, thisEnd.sin_addr.S_un.S_un_b.s_b3, thisEnd.sin_addr.S_un.S_un_b.s_b4, ntohs(thisEnd.sin_port));
-// #else
-//  			char buf[100];
-// 			log("stream receiving on %s:%d\n", inet_ntop(AF_INET, &thisEnd.sin_addr, buf, 100), ntohs(thisEnd.sin_port));
-// #endif
 		}
 
 		// first peek to find out which packet type this is
-		int size = recv(sok, buf, sizeof(CapturyRequestPacket), 0);
+		int size = recv(sok, buffer.data(), sizeof(CapturyRequestPacket), 0);
 		if (size == 0) { // the other end shut down the socket...
 			log("socket shut down by other end %s\n", sockstrerror());
 			closesocket(sok);
@@ -780,9 +802,13 @@ static bool receive(SOCKET& sok)
 
 		if (p->size > (int)sizeof(CapturyRequestPacket)) {
 			int at = sizeof(CapturyRequestPacket);
-			int toGet = std::min<int>(p->size, sizeof(buf)) - at;
+			if (p->size > (int)buffer.size()) {
+				buffer.resize(std::min(p->size, 10000000));
+				p = (CapturyRequestPacket*)buffer.data();
+			}
+			int toGet = std::min<int>(p->size, buffer.size()) - at;
 			while (toGet > 0) {
-				size = recv(sok, buf + at, toGet, 0);
+				size = recv(sok, &buffer[at], toGet, 0);
 				if (size == 0) { // the other end shut down the socket...
 					log("socket shut down by other end: %s\n", sockstrerror());
 					closesocket(sok);
@@ -799,9 +825,9 @@ static bool receive(SOCKET& sok)
 					return false;
 				}
 				at += size;
-				toGet = std::min<int>(p->size, sizeof(buf)) - at;
+				toGet = std::min<int>(p->size, buffer.size()) - at;
 			}
-			size = std::min<int>(p->size, sizeof(buf));
+			size = std::min<int>(p->size, buffer.size());
 		}
 
 		// log("received packet size %d type %d (expected %d)\n", size, p->type, expect);
@@ -811,7 +837,7 @@ static bool receive(SOCKET& sok)
 			handshakeFinished = true;
 			break;
 		case capturyActors: {
-			CapturyActorsPacket* cap = (CapturyActorsPacket*)&buf[0];
+			CapturyActorsPacket* cap = (CapturyActorsPacket*)p;
 			log("expecting %d actor packets\n", cap->numActors);
 			// if (expect == capturyActors) {
 			// 	if (cap->numActors != 0) {
@@ -822,7 +848,7 @@ static bool receive(SOCKET& sok)
 			// numRetries += packetsMissing;
 			break; }
 		case capturyCameras: {
-			CapturyCamerasPacket* ccp = (CapturyCamerasPacket*)&buf[0];
+			CapturyCamerasPacket* ccp = (CapturyCamerasPacket*)p;
 			numCameras = ccp->numCameras;
 			// if (expect == capturyCameras) {
 			// 	packetsMissing = numCameras;
@@ -834,13 +860,13 @@ static bool receive(SOCKET& sok)
 		case capturyActor2:
 		case capturyActor3: {
 			CapturyActor_p actor(new CapturyActor);
-			CapturyActorPacket* cap = (CapturyActorPacket*)&buf[0];
+			CapturyActorPacket* cap = (CapturyActorPacket*)p;
 			strncpy(actor->name, cap->name, sizeof(actor->name));
 			actor->id = cap->id;
 			actor->numJoints = cap->numJoints;
 			actor->joints = new CapturyJoint[actor->numJoints];
 			char* at = (char*)cap->joints;
-			char* end = buf + size;
+			char* end = &buffer[size];
 			int version = (p->type == capturyActor) ? 1 : (p->type == capturyActor2) ? 2 : 3;
 
 			int numTransmittedJoints = 0;
@@ -921,7 +947,7 @@ static bool receive(SOCKET& sok)
 		case capturyActorContinued2:
 		case capturyActorContinued3: {
 			int version = (p->type == capturyActor) ? 1 : (p->type == capturyActor2) ? 2 : 3;
-			CapturyActorContinuedPacket* cacp = (CapturyActorContinuedPacket*)&buf[0];
+			CapturyActorContinuedPacket* cacp = (CapturyActorContinuedPacket*)p;
 			lockMutex(&partialActorMutex);
 			if (partialActors.count(cacp->id) == 0) {
 				unlockMutex(&partialActorMutex);
@@ -934,7 +960,7 @@ static bool receive(SOCKET& sok)
 			int j = cacp->startJoint;
 			switch (version) {
 			case 1: {
-				CapturyJointPacket* end = (CapturyJointPacket*)&buf[size];
+				CapturyJointPacket* end = (CapturyJointPacket*)&buffer[size];
 				for (int k = 0; j < actor->numJoints && &cacp->joints[k] < end; ++j, ++k) {
 					strncpy(actor->joints[j].name, cacp->joints[k].name, sizeof(actor->joints[j].name)-1);
 					actor->joints[j].parent = cacp->joints[k].parent;
@@ -947,7 +973,7 @@ static bool receive(SOCKET& sok)
 				break; }
 			case 2: {
 				char* at = (char*)cacp->joints;
-				char* end = (char*)&buf[size];
+				char* end = (char*)&buffer[size];
 				for ( ; j < actor->numJoints && at < end; ++j) {
 					CapturyJointPacket2* jp = (CapturyJointPacket2*)at;
 					actor->joints[j].parent = jp->parent;
@@ -962,7 +988,7 @@ static bool receive(SOCKET& sok)
 				break; }
 			case 3: {
 				char* at = (char*)cacp->joints;
-				char* end = (char*)&buf[size];
+				char* end = (char*)&buffer[size];
 				for ( ; j < actor->numJoints && at < end; ++j) {
 					CapturyJointPacket3* jp = (CapturyJointPacket3*)at;
 					actor->joints[j].parent = jp->parent;
@@ -992,21 +1018,22 @@ static bool receive(SOCKET& sok)
 			log("received actor cont %d (%d/%d)\n", actor->id, j, actor->numJoints);
 			break; }
 		case capturyActorBlendShapes: {
-			CapturyActorBlendShapesPacket* cabs = (CapturyActorBlendShapesPacket*)&buf[0];
+			CapturyActorBlendShapesPacket* cabs = (CapturyActorBlendShapesPacket*)p;
 			lockMutex(&mutex);
 			std::shared_ptr<CapturyActor> actor = actorsById[cabs->actorId];
 			actor->numBlendShapes = cabs->numBlendShapes;
 			actor->blendShapes = new CapturyBlendShape[actor->numBlendShapes];
 			char* at = cabs->blendShapeNames;
 			for (int i = 0; i < actor->numBlendShapes; ++i) {
-				strncpy(actor->blendShapes[i].name, at, 64);
+				strncpy(actor->blendShapes[i].name, at, 63);
+				actor->blendShapes[i].name[63] = '\0';
 				at += std::min<int>(strlen(actor->blendShapes[i].name) + 1, 64);
 			}
 			unlockMutex(&mutex);
 			break; }
 		case capturyCamera: {
 			CapturyCamera camera;
-			CapturyCameraPacket* ccp = (CapturyCameraPacket*)&buf[0];
+			CapturyCameraPacket* ccp = (CapturyCameraPacket*)p;
 			strncpy(camera.name, ccp->name, sizeof(camera.name));
 			camera.id = ccp->id;
 			for (int x = 0; x < 3; ++x) {
@@ -1032,13 +1059,13 @@ static bool receive(SOCKET& sok)
 			log("received pose on control socket\n");
 			break;
 		case capturyDaySessionShot: {
-			CapturyDaySessionShotPacket* dss = (CapturyDaySessionShotPacket*)&buf[0];
+			CapturyDaySessionShotPacket* dss = (CapturyDaySessionShotPacket*)p;
 			currentDay = dss->day;
 			currentSession = dss->session;
 			currentShot = dss->shot;
 			break; }
 		case capturyTime2: {
-			CapturyTimePacket2* tp = (CapturyTimePacket2*)&buf[0];
+			CapturyTimePacket2* tp = (CapturyTimePacket2*)p;
 			if (tp->timeId != nextTimeId) {
 				log("time id doesn't match, expected %d got %d", nextTimeId, tp->timeId);
 				p->type = capturyError;
@@ -1046,7 +1073,7 @@ static bool receive(SOCKET& sok)
 			}
 			} // fall through
 		case capturyTime: {
-			CapturyTimePacket* tp = (CapturyTimePacket*)&buf[0];
+			CapturyTimePacket* tp = (CapturyTimePacket*)p;
 			uint64_t pongTime = getTime();
 			// we assume that the network transfer time is symmetric
 			// so the timestamp given in the packet was captured at (pingTime + pongTime) / 2
@@ -1058,15 +1085,21 @@ static bool receive(SOCKET& sok)
 			log("local: %" PRIu64 " remote: %" PRIu64 " => offset %" PRId64 ", roundtrip %" PRId64 "\n", t, tp->timestamp, tp->timestamp - t, pongTime - pingTime);
 			break; }
 		case capturyCustom: {
-			CapturyCustomPacket* ccp = (CapturyCustomPacket*)&buf[0];
+			CapturyCustomPacket* ccp = (CapturyCustomPacket*)p;
 			ccp->name[15] = 0;
 			std::map<std::string, CapturyCustomPacketCallback>::iterator it = callbacks.find(ccp->name);
 			if (it == callbacks.end()) // no callback for this string
 				break;
 			it->second(ccp->size - sizeof(CapturyCustomPacketCallback), ccp->data);
 			break; }
+		case capturyEnableRemoteLogging:
+			doRemoteLogging = true;
+			break;
+		case capturyDisableRemoteLogging:
+			doRemoteLogging = false;
+			break;
 		case capturyImageHeader: {
-			CapturyImageHeaderPacket* tp = (CapturyImageHeaderPacket*)&buf[0];
+			CapturyImageHeaderPacket* tp = (CapturyImageHeaderPacket*)p;
 
 			// update the image structures
 			lockMutex(&mutex);
@@ -1099,7 +1132,7 @@ static bool receive(SOCKET& sok)
 
 			break; }
 		case capturyMarkerTransform: {
-			CapturyMarkerTransformPacket* cmt = (CapturyMarkerTransformPacket*)&buf[0];
+			CapturyMarkerTransformPacket* cmt = (CapturyMarkerTransformPacket*)p;
 			ActorAndJoint aj(cmt->actor, cmt->joint);
 			MarkerTransform& mt = markerTransforms[aj];
 			mt.timestamp = cmt->timestamp;
@@ -1111,25 +1144,25 @@ static bool receive(SOCKET& sok)
 			mt.trafo.rotation[2] = cmt->rotation[2];
 			break; }
 		case capturyScalingProgress: {
-			CapturyScalingProgressPacket* spp = (CapturyScalingProgressPacket*)&buf[0];
+			CapturyScalingProgressPacket* spp = (CapturyScalingProgressPacket*)p;
 			lockMutex(&mutex);
 			actorData[spp->actor].scalingProgress = spp->progress;
 			unlockMutex(&mutex);
 			break; }
 		case capturyBackgroundQuality: {
-			CapturyBackgroundQualityPacket* bqp = (CapturyBackgroundQualityPacket*)&buf[0];
+			CapturyBackgroundQualityPacket* bqp = (CapturyBackgroundQualityPacket*)p;
 			backgroundQuality = bqp->quality;
 			break; }
 		case capturyStatus: {
-			CapturyStatusPacket* sp = (CapturyStatusPacket*)&buf[0];
+			CapturyStatusPacket* sp = (CapturyStatusPacket*)p;
 			lastStatusMessage = sp->message; // FIXME this is unsafe. assumes that message is 0 terminated.
 			break; }
 		case capturyStartRecordingAck2: {
-			CapturyTimePacket* srp = (CapturyTimePacket*)&buf[0];
+			CapturyTimePacket* srp = (CapturyTimePacket*)p;
 			startRecordingTime = srp->timestamp;
 			break; }
 		case capturyActorModeChanged: {
-			CapturyActorModeChangedPacket* amc = (CapturyActorModeChangedPacket*)&buf[0];
+			CapturyActorModeChangedPacket* amc = (CapturyActorModeChangedPacket*)p;
 			if (actorChangedCallback != NULL)
 				actorChangedCallback(amc->actor, amc->mode);
 			lockMutex(&mutex);
@@ -1362,6 +1395,10 @@ static void* streamLoop(void* arg)
 		return 0;
 	}
 
+	// send dummy packet to trick some firewalls into letting us through
+	CapturyTimePacket timePacket = {capturyTime, sizeof(CapturyTimePacket), getTime()};
+	send(streamSock, &timePacket, sizeof(timePacket), 0);
+
 	int sockBufSize = 500000;
 	socklen_t optSize = sizeof(sockBufSize);
 	getsockopt(streamSock, SOL_SOCKET, SO_RCVBUF, (char*)&sockBufSize, &optSize);
@@ -1416,11 +1453,11 @@ static void* streamLoop(void* arg)
 
 		dataAvailableTime = getRemoteTime(getTime());
 
-		char buf[10000];
-		CapturyPosePacket* cpp = (CapturyPosePacket*)&buf[0];
+		std::vector<char> buffer(10000);
+		CapturyPosePacket* cpp = (CapturyPosePacket*)buffer.data();
 
 		// first peek to find out which packet type this is
-		int size = recv(streamSock, buf, sizeof(buf), 0);
+		int size = recv(streamSock, buffer.data(), buffer.size(), 0);
 //		log("received stream packet size %d (%d %d)\n", (int) size, cpp->type, cpp->size);
 		if (size == 0) { // the other end shut down the socket...
 			lastErrorMessage = "Stream socket closed unexpectedly";
@@ -1449,7 +1486,7 @@ static void* streamLoop(void* arg)
 
 		if (cpp->type == capturyImageData) {
 			// received data for the image
-			CapturyImageDataPacket* cip = (CapturyImageDataPacket*)&buf[0];
+			CapturyImageDataPacket* cip = (CapturyImageDataPacket*)buffer.data();
 			//log("received image data for actor %x (payload %d bytes)\n", cip->actor, cip->size-16);
 
 			// check if we have a texture already
@@ -1483,7 +1520,7 @@ static void* streamLoop(void* arg)
 		}
 
 		if (cpp->type == capturyStreamedImageHeader) {
-			CapturyImageHeaderPacket* tp = (CapturyImageHeaderPacket*)&buf[0];
+			CapturyImageHeaderPacket* tp = (CapturyImageHeaderPacket*)buffer.data();
 
 			// update the image structures
 			lockMutex(&mutex);
@@ -1514,7 +1551,7 @@ static void* streamLoop(void* arg)
 
 		if (cpp->type == capturyStreamedImageData) {
 			// received data for the image
-			CapturyImageDataPacket* cip = (CapturyImageDataPacket*)&buf[0];
+			CapturyImageDataPacket* cip = (CapturyImageDataPacket*)buffer.data();
 //			log("received image data for camera %d (payload %d bytes)\n", cip->actor, cip->size-16);
 
 			// check if we have a texture already
@@ -1584,7 +1621,7 @@ static void* streamLoop(void* arg)
 
 		if (cpp->type == capturyARTag) {
 			//log("received ARTag message\n");
-			CapturyARTagPacket* art = (CapturyARTagPacket*)&buf[0];
+			CapturyARTagPacket* art = (CapturyARTagPacket*)buffer.data();
 			lockMutex(&mutex);
 			arTagsTime = getTime();
 			arTags.resize(art->numTags);
@@ -1598,7 +1635,7 @@ static void* streamLoop(void* arg)
 		}
 
 		if (cpp->type == capturyAngles) {
-			CapturyAnglesPacket* ang = (CapturyAnglesPacket*)&buf[0];
+			CapturyAnglesPacket* ang = (CapturyAnglesPacket*)buffer.data();
 			if (newAnglesCallback != NULL)
 				newAnglesCallback(Captury_getActor(ang->actor), ang->numAngles, ang->angles);
 			lockMutex(&mutex);
@@ -1610,7 +1647,7 @@ static void* streamLoop(void* arg)
 		}
 
 		if (cpp->type == capturyActorModeChanged) {
-			CapturyActorModeChangedPacket* amc = (CapturyActorModeChangedPacket*)&buf[0];
+			CapturyActorModeChangedPacket* amc = (CapturyActorModeChangedPacket*)buffer.data();
 			log("received actorModeChanged packet %x %d\n", amc->actor, amc->mode);
 			if (actorChangedCallback != NULL)
 				actorChangedCallback(amc->actor, amc->mode);
@@ -1674,7 +1711,7 @@ static void* streamLoop(void* arg)
 		}
 
 		if (cpp->type == capturyLatency) {
-			CapturyLatencyPacket* lp = (CapturyLatencyPacket*)&buf[0];
+			CapturyLatencyPacket* lp = (CapturyLatencyPacket*)buffer.data();
 			lockMutex(&mutex);
 			currentLatency = *lp;
 			if (mostRecentPoseReceivedTimestamp == currentLatency.poseTimestamp) {
@@ -1755,7 +1792,7 @@ static void* streamLoop(void* arg)
 		// either copy to currentPose or inProgress pose
 		int numBytesToCopy = size - at;
 		bool done = false;
-		if ((cpp->type == capturyPose || cpp->type == capturyPose2) && numBytesToCopy == (numTransforms*6 + numBlendShapes)*sizeof(float)) {
+		if ((cpp->type == capturyPose || cpp->type == capturyPose2) && numBytesToCopy == (int)((numTransforms*6 + numBlendShapes)*sizeof(float))) {
 			if (numTransforms != 0)
 				memcpy(it->second.currentPose.transforms, values, numTransforms*6*sizeof(float));
 			if (numBlendShapes != 0)
