@@ -1754,14 +1754,18 @@ static void* streamLoop(void* arg)
 			at = (int)((char*)(((CapturyPosePacket2*)cpp)->values) - (char*)cpp);
 		}
 
-		if (actorsById.count(cpp->actor) != 0 && actorsById[cpp->actor]->numJoints * 6 + actorsById[cpp->actor]->numBlendShapes != numValues) {
-			log("expected %d+%d dofs, got %d\n", actorsById[cpp->actor]->numJoints * 6, actorsById[cpp->actor]->numBlendShapes, numValues);
-			unlockMutex(&mutex);
-			continue;
-		}
-
 		int numTransforms = std::min<int>(numValues / 6, actorsById[cpp->actor]->numJoints);
 		int numBlendShapes = std::min<int>(numValues - numTransforms*6, actorsById[cpp->actor]->numBlendShapes);
+
+		if (actorsById.count(cpp->actor) != 0 && actorsById[cpp->actor]->numJoints * 6 + actorsById[cpp->actor]->numBlendShapes != numValues) {
+			if (actorsById[cpp->actor]->numJoints * 6 == numValues)
+				numBlendShapes = 0;
+			else {
+				log("expected %d+%d dofs, got %d\n", actorsById[cpp->actor]->numJoints * 6, actorsById[cpp->actor]->numBlendShapes, numValues);
+				unlockMutex(&mutex);
+				continue;
+			}
+		}
 
 		std::unordered_map<int, ActorData>::iterator it = actorData.find(cpp->actor);
 		if (it == actorData.end() || (it->second.currentPose.numTransforms == 0 && it->second.currentPose.numBlendShapes == 0)) {
