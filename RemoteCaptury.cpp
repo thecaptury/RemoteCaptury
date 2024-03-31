@@ -1317,7 +1317,7 @@ static void receivedPose(CapturyPose* pose, int actorId, ActorData* aData, uint6
 
 	unlockMutex(&mutex);
 	for (int actorId : stoppedActorIds)
-		actorChangedCallback(actorIds, ACTOR_STOPPED);
+		actorChangedCallback(actorId, ACTOR_STOPPED);
 }
 
 static void decompressPose(CapturyPose* pose, uint8_t* v, CapturyActor* actor)
@@ -1912,38 +1912,39 @@ extern "C" int Captury_connect2(const char* ip, unsigned short port, unsigned sh
 // returns 1 if successful, 0 otherwise
 extern "C" int Captury_disconnect()
 {
-	if (sock == -1)
-		return 1;
-
-	closesocket(sock);
-
-	sock = -1;
-
-	handshakeFinished = false;
-
-	stopReceiving = 1;
-
-	stopStreamThread = 1;
-
-#ifdef WIN32
-	if (wsaInited) {
-		WSACleanup();
-		wsaInited = false;
+	bool closedOrStopped = false;
+	if (sock != -1) {
+		log("[%d] Captury_disconnect: will close socket %d", std::this_thread::get_id(), sock);
+		closesocket(sock);
+		sock = -1;
+		closedOrStopped = true;
 	}
-#endif
 
-#ifdef WIN32
-	WaitForSingleObject(receiveThread, 1000);
-	WaitForSingleObject(streamThread, 1000);
-#else
-	void* retVal;
-	pthread_join(receiveThread, &retVal);
-	pthread_join(streamThread, &retVal);
-#endif
+	if (!stopReceiving) {
+		handshakeFinished = false;
+		stopReceiving = 1;
+		stopStreamThread = 1;
+
+		#ifdef WIN32
+		if (wsaInited) {
+			WSACleanup();
+			wsaInited = false;
+		}
+
+		WaitForSingleObject(receiveThread, 1000);
+		WaitForSingleObject(streamThread, 1000);
+		#else
+		void* retVal;
+		pthread_join(receiveThread, &retVal);
+		pthread_join(streamThread, &retVal);
+		#endif
+
+		closedOrStopped = true;
+	}
 
 	deleteActors();
 
-	return 1;
+	return closedOrStopped ? 1 : 0;
 }
 
 // returns 1 if successful, 0 otherwise
