@@ -186,7 +186,10 @@ struct ActorData {
 
 	ActorData() : scalingProgress(0), trackingQuality(100), lastPoseTimestamp(0), status(ACTOR_STOPPED), flags(0)
 	{
+		currentPose.timestamp = 0;
 		currentPose.numTransforms = 0;
+		currentPose.numBlendShapes = 0;
+		currentPose.flags = 0;
 		currentTextures.width = 0;
 		currentTextures.height = 0;
 		currentTextures.data = NULL;
@@ -944,6 +947,8 @@ static bool receive(SOCKET& sok)
 				lockMutex(&mutex);
 				actorsById[actor->id] = actor;
 				unlockMutex(&mutex);
+				if (actorChangedCallback)
+					actorChangedCallback(actor->id, actorData[actor->id].status);
 			} else {
 				lockMutex(&partialActorMutex);
 				partialActors[actor->id] = actor;
@@ -1014,6 +1019,8 @@ static bool receive(SOCKET& sok)
 				lockMutex(&mutex);
 				actorsById[actor->id] = actor;
 				unlockMutex(&mutex);
+				if (actorChangedCallback)
+					actorChangedCallback(actor->id, actorData[actor->id].status);
 				lockMutex(&partialActorMutex);
 				partialActors.erase(actor->id);
 				unlockMutex(&partialActorMutex);
@@ -1153,7 +1160,8 @@ static bool receive(SOCKET& sok)
 		case capturyScalingProgress: {
 			CapturyScalingProgressPacket* spp = (CapturyScalingProgressPacket*)p;
 			lockMutex(&mutex);
-			actorData[spp->actor].scalingProgress = spp->progress;
+			if (actorData.count(spp->actor))
+				actorData[spp->actor].scalingProgress = spp->progress;
 			unlockMutex(&mutex);
 			break; }
 		case capturyBackgroundQuality: {
@@ -1173,7 +1181,8 @@ static bool receive(SOCKET& sok)
 			if (actorChangedCallback != NULL)
 				actorChangedCallback(amc->actor, amc->mode);
 			lockMutex(&mutex);
-			actorData[amc->actor].status = (CapturyActorStatus)amc->mode;
+			if (actorData.count(amc->actor))
+				actorData[amc->actor].status = (CapturyActorStatus)amc->mode;
 			unlockMutex(&mutex);
 			break; }
 		case capturyStreamAck:
@@ -1206,17 +1215,29 @@ static void deleteActors()
 		delete[] it.second->joints;
 	actorsById.clear();
 
+	std::vector<int> deletedActorIds;
 	std::unordered_map<int, ActorData>::iterator it;
 	for (it = actorData.begin(); it != actorData.end(); ++it) {
 		if (it->second.currentPose.numTransforms != 0) {
-			delete[] it->second.currentPose.transforms;
+			if (it->second.currentPose.numTransforms)
+				delete[] it->second.currentPose.transforms;
 			it->second.currentPose.numTransforms = 0; // should not be necessary but weird things do happen
+			if (it->second.currentPose.numBlendShapes)
+				delete[] it->second.currentPose.blendShapeActivations;
+			it->second.currentPose.numBlendShapes = 0; // should not be necessary but weird things do happen
 			it->second.currentPose.transforms = NULL;
 		}
 		if (it->second.currentTextures.data != NULL)
 			free(it->second.currentTextures.data);
+
+		if (actorChangedCallback)
+			deletedActorIds.push_back(it->first);
 	}
+	actorData.clear();
 	unlockMutex(&mutex);
+
+	for (int id : deletedActorIds)
+		actorChangedCallback(id, ACTOR_DELETED);
 }
 
 #ifdef WIN32
@@ -1248,7 +1269,7 @@ static void* receiveLoop(void* arg)
 					if (sock != -1)
 						break;
 
-					sleepMicroSeconds(1000000);
+					sleepMicroSeconds(100000);
 				}
 
 				if (streamWhat != CAPTURY_STREAM_NOTHING)
@@ -1316,8 +1337,8 @@ static void receivedPose(CapturyPose* pose, int actorId, ActorData* aData, uint6
 	}
 
 	unlockMutex(&mutex);
-	for (int actorId : stoppedActorIds)
-		actorChangedCallback(actorId, ACTOR_STOPPED);
+	for (int id : stoppedActorIds)
+		actorChangedCallback(id, ACTOR_STOPPED);
 }
 
 static void decompressPose(CapturyPose* pose, uint8_t* v, CapturyActor* actor)
@@ -1661,7 +1682,8 @@ static void* streamLoop(void* arg)
 			if (actorChangedCallback != NULL)
 				actorChangedCallback(amc->actor, amc->mode);
 			lockMutex(&mutex);
-			actorData[amc->actor].status = (CapturyActorStatus)amc->mode;
+			if (actorData.count(amc->actor))
+				actorData[amc->actor].status = (CapturyActorStatus)amc->mode;
 			unlockMutex(&mutex);
 			continue;
 		}
@@ -1965,7 +1987,7 @@ extern "C" int Captury_getActors(const CapturyActor** actrs)
 	actorPointers.reserve(actorsById.size());
 
 	int numActors = 0;
-	for (auto it : actorsById) {
+	for (auto& it : actorsById) {
 		if (actorData[it.first].status != ACTOR_DELETED) {
 			actorPointers.push_back(*it.second.get());
 			++numActors;
@@ -2156,8 +2178,8 @@ extern "C" CapturyPose* Captury_getCurrentPoseAndTrackingConsistencyForActor(int
 	}
 
 	unlockMutex(&mutex);
-	for (int actorId : stoppedActorIds)
-		actorChangedCallback(actorId, ACTOR_STOPPED);
+	for (int id : stoppedActorIds)
+		actorChangedCallback(id, ACTOR_STOPPED);
 	lockMutex(&mutex);
 
 	if (!stillCurrent) {
@@ -2363,7 +2385,7 @@ extern "C" uint64_t Captury_getMarkerTransform(int actorId, int joint, CapturyTr
 extern "C" int Captury_getScalingProgress(int actorId)
 {
 	lockMutex(&mutex);
-	int scaling = actorData[actorId].scalingProgress;
+	int scaling = actorData.count(actorId) ? actorData[actorId].scalingProgress : 0;
 	unlockMutex(&mutex);
 	return scaling;
 }
