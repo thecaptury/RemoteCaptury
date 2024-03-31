@@ -336,7 +336,7 @@ static void log(const char* format, ...)
 		lp->type = capturyMessage;
 		lp->size = 9 + strlen(buffer+9) + 1;
 		lp->logLevel = CAPTURY_LOG_INFO;
-		send(sock, lp, lp->size, 0);
+		send(sock, (const char*)lp, lp->size, 0);
 	}
 }
 
@@ -801,12 +801,19 @@ static bool receive(SOCKET& sok)
 		}
 
 		if (p->size > (int)sizeof(CapturyRequestPacket)) {
+			if (p->size > 10000000) {
+				log("invalid packet size: %d. closing connection.", p->size);
+				closesocket(sok);
+				sok = -1;
+				return false;
+			}
+
 			int at = sizeof(CapturyRequestPacket);
 			if (p->size > (int)buffer.size()) {
-				buffer.resize(std::min(p->size, 10000000));
+				buffer.resize(p->size);
 				p = (CapturyRequestPacket*)buffer.data();
 			}
-			int toGet = std::min<int>(p->size, buffer.size()) - at;
+			int toGet = p->size - at;
 			while (toGet > 0) {
 				size = recv(sok, &buffer[at], toGet, 0);
 				if (size == 0) { // the other end shut down the socket...
@@ -1397,7 +1404,7 @@ static void* streamLoop(void* arg)
 
 	// send dummy packet to trick some firewalls into letting us through
 	CapturyTimePacket timePacket = {capturyTime, sizeof(CapturyTimePacket), getTime()};
-	send(streamSock, &timePacket, sizeof(timePacket), 0);
+	send(streamSock, (const char*)&timePacket, sizeof(timePacket), 0);
 
 	int sockBufSize = 500000;
 	socklen_t optSize = sizeof(sockBufSize);
