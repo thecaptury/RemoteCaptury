@@ -1369,7 +1369,7 @@ static void decompressPose(CapturyPose* pose, uint8_t* v, CapturyActor* actor)
 		copyTo += 6;
 	}
 
-	for (int i = 0; i < actor->numBlendShapes; ++i, v += 2)
+	for (int i = 0; i < pose->numBlendShapes; ++i, v += 2)
 		pose->blendShapeActivations[i] = (*(uint16_t*)v) / 32768.0f;
 }
 
