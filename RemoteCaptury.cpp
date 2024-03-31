@@ -1303,19 +1303,21 @@ static void receivedPose(CapturyPose* pose, int actorId, ActorData* aData, uint6
 
 	// mark actors as stopped if no data was received for a while
 	now -= 500000; // half a second ago
+	std::vector<int> stoppedActorIds;
 	for (std::unordered_map<int, ActorData>::iterator it = actorData.begin(); it != actorData.end(); ++it) {
 		if (it->second.lastPoseTimestamp > now) // still current
 			continue;
 
 		if (it->second.status == ACTOR_SCALING || it->second.status == ACTOR_TRACKING) {
-			if (actorChangedCallback) {
-				unlockMutex(&mutex);
-				actorChangedCallback(it->first, ACTOR_STOPPED);
-				lockMutex(&mutex);
-			}
+			if (actorChangedCallback)
+				stoppedActorIds.push_back(it->first);
 			it->second.status = ACTOR_STOPPED;
 		}
 	}
+
+	unlockMutex(&mutex);
+	for (int actorId : stoppedActorIds)
+		actorChangedCallback(actorIds, ACTOR_STOPPED);
 }
 
 static void decompressPose(CapturyPose* pose, uint8_t* v, CapturyActor* actor)
@@ -1813,13 +1815,11 @@ static void* streamLoop(void* arg)
 			decompressPose(&it->second.currentPose, (uint8_t*)values, actorsById[cpp->actor].get());
 			done = true;
 		} else {// partial
-			unlockMutex(&mutex);
 			if (it->second.inProgress[inProgressIndex].pose == NULL)
 				it->second.inProgress[inProgressIndex].pose = new float[numValues];
 			memcpy(it->second.inProgress[inProgressIndex].pose, values, numBytesToCopy);
 			it->second.inProgress[inProgressIndex].bytesDone = numBytesToCopy;
 			it->second.inProgress[inProgressIndex].timestamp = cpp->timestamp;
-			lockMutex(&mutex);
 		}
 
 		if (done)
@@ -2140,21 +2140,25 @@ extern "C" CapturyPose* Captury_getCurrentPoseAndTrackingConsistencyForActor(int
 	uint64_t now = getTime() - 500000; // half a second ago
 	bool stillCurrent = true;
 	lockMutex(&mutex);
+	std::vector<int> stoppedActorIds;
 	for (std::unordered_map<int, ActorData>::iterator it = actorData.begin(); it != actorData.end(); ++it) {
 		if (it->second.lastPoseTimestamp > now) // still current
 			continue;
 
 		if (it->second.status == ACTOR_SCALING || it->second.status == ACTOR_TRACKING) {
 			it->second.status = ACTOR_STOPPED;
-			if (actorChangedCallback) {
-				unlockMutex(&mutex);
-				actorChangedCallback(it->first, ACTOR_STOPPED);
-				lockMutex(&mutex);
-			}
+			if (actorChangedCallback)
+				stoppedActorIds.push_back(it->first);
 			if (it->first == actorId)
 				stillCurrent = false;
 		}
 	}
+
+	unlockMutex(&mutex);
+	for (int actorId : stoppedActorIds)
+		actorChangedCallback(actorId, ACTOR_STOPPED);
+	lockMutex(&mutex);
+
 	if (!stillCurrent) {
 		lastErrorMessage = "actor has disappeared";
 		unlockMutex(&mutex);
