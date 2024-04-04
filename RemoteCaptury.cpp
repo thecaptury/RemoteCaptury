@@ -1936,7 +1936,6 @@ extern "C" int Captury_disconnect()
 {
 	bool closedOrStopped = false;
 	if (sock != -1) {
-		log("[%d] Captury_disconnect: will close socket %d", std::this_thread::get_id(), sock);
 		closesocket(sock);
 		sock = -1;
 		closedOrStopped = true;
