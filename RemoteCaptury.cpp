@@ -1429,6 +1429,8 @@ static void* streamLoop(void* arg)
 	CapturyTimePacket timePacket = {capturyTime, sizeof(CapturyTimePacket), getTime()};
 	send(streamSock, (const char*)&timePacket, sizeof(timePacket), 0);
 
+	uint64_t lastKeepAliveTime = getTime();
+
 	int sockBufSize = 500000;
 	socklen_t optSize = sizeof(sockBufSize);
 	getsockopt(streamSock, SOL_SOCKET, SO_RCVBUF, (char*)&sockBufSize, &optSize);
@@ -1503,6 +1505,15 @@ static void* streamLoop(void* arg)
 					log("socket filled %.1f%%", (read * 100.0f) / sockBufSize);
 				}
 				#endif
+
+				// renew the keep-alive firewall hole punching
+				uint64_t now = getTime();
+				if (now > lastKeepAliveTime + 1000000) {
+					timePacket.timestamp = now;
+					send(streamSock, (const char*)&timePacket, sizeof(timePacket), 0);
+					lastKeepAliveTime = now;
+				}
+
 				continue;
 			}
 			char buff[200];
