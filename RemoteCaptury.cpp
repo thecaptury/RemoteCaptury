@@ -318,6 +318,16 @@ static inline void unlockMutex(MutexStruct* mtx) RELEASE(mtx)
 
 static void log(const char* format, ...)
 {
+	#ifdef WIN32
+	if (!mutexesInited) {
+		InitializeCriticalSection(&mutex);
+		InitializeCriticalSection(&partialActorMutex);
+		InitializeCriticalSection(&syncMutex);
+		InitializeCriticalSection(&logMutex);
+		mutexesInited = true;
+	}
+	#endif
+
 	char buffer[509];
 	va_list args;
 	va_start(args, format);
