@@ -16,6 +16,7 @@ include_directories(../include)
 add_library(RemoteCaptury SHARED RemoteCaptury.cpp)
 add_library(RemoteCapturyStatic STATIC RemoteCaptury.cpp)
 
+set(Python3_USE_STATIC_LIBS OFF)
 find_package (Python3 COMPONENTS Development)
 if (NOT TARGET Python3::Python)
 	find_package(PythonLibs)
