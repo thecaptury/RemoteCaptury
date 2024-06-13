@@ -1317,6 +1317,9 @@ static bool sendPacket(CapturyRequestPacket* packet, CapturyPacketTypes expected
 
 static void receivedPose(CapturyPose* pose, int actorId, ActorData* aData, uint64_t timestamp) REQUIRES(mutex)
 {
+	if (aData->status == ACTOR_DELETED)
+		return;
+
 	if (getLocalPoses)
 		Captury_convertPoseToLocal(pose, actorId);
 
