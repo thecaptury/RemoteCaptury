@@ -390,6 +390,20 @@ CAPTURY_DLL_EXPORT void Captury_enablePrintf(int on); // 0 to turn off
 CAPTURY_DLL_EXPORT void Captury_enableRemoteLogging(int on); // 0 to turn off
 CAPTURY_DLL_EXPORT const char* Captury_getNextLogMessage(); // do free.
 
+#define CAPTURY_LOG_FATAL	0	// this is definitely causing a crash
+#define CAPTURY_LOG_ERROR	1	// for things that went so wrong
+// that the program will probably not work
+#define CAPTURY_LOG_WARNING	2	// when things went wrong but the program
+					// is probably going to work anyhow
+#define CAPTURY_LOG_IMPORTANT	3	// the program is running normally but some
+					// important messages needs to be passed to the user
+#define CAPTURY_LOG_INFO	4	// the program is running normally but some
+					// interesting points have been reached
+#define CAPTURY_LOG_DEBUG	5	// debugging messages
+#define CAPTURY_LOG_TRACE	6	// for tracing function calls
+
+CAPTURY_DLL_EXPORT void Captury_log(int logLevel, const char* format, ...);
+
 //
 // it is safe to ignore everything below this line
 //
@@ -896,18 +910,6 @@ struct CapturyLatencyPacket {
 	uint64_t	poseTimestamp;	// timestamp of corresponding pose
 };
 
-
-#define CAPTURY_LOG_FATAL	0	// this is definitely causing a crash
-#define CAPTURY_LOG_ERROR	1	// for things that went so wrong
-					// that the program will probably not work
-#define CAPTURY_LOG_WARNING	2	// when things went wrong but the program
-					// is probably going to work anyhow
-#define CAPTURY_LOG_IMPORTANT	3	// the program is running normally but some
-					// important messages needs to be passed to the user
-#define CAPTURY_LOG_INFO	4	// the program is running normally but some
-					// interesting points have been reached
-#define CAPTURY_LOG_DEBUG	5	// debugging messages
-#define CAPTURY_LOG_TRACE	6	// for tracing function calls
 
 // sent to server
 struct CapturyLogPacket {

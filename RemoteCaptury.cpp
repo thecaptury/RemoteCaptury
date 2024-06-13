@@ -329,16 +329,13 @@ static void log(const char* format, ...)
 	#endif
 
 	char buffer[509];
-	va_list args;
-	va_start(args, format);
-	vsnprintf(buffer+9, 500, format, args);
-	va_end(args);
+	vsnprintf(buffer + 9, 500, format, args);
 
 	if (doPrintf)
-		printf("%s", buffer+9);
+		printf("%s", buffer + 9);
 
 	lockMutex(&logMutex);
-	logs.emplace_back(buffer+9);
+	logs.emplace_back(buffer + 9);
 
 	if (logs.size() > 100000)
 		logs.pop_front();
@@ -347,10 +344,26 @@ static void log(const char* format, ...)
 	if (doRemoteLogging && sock != -1) {
 		CapturyLogPacket* lp = (CapturyLogPacket*)buffer;
 		lp->type = capturyMessage;
-		lp->size = 9 + strlen(buffer+9) + 1;
-		lp->logLevel = CAPTURY_LOG_INFO;
+		lp->size = 9 + strlen(buffer + 9) + 1;
+		lp->logLevel = logLevel;
 		send(sock, (const char*)lp, lp->size, 0);
 	}
+}
+
+static void log(const char* format, ...)
+{
+	va_list args;
+	va_start(args, format);
+	actualLog(CAPTURY_LOG_INFO, format, args);
+	va_end(args);
+}
+
+void Captury_log(int logLevel, const char* format, ...)
+{
+	va_list args;
+	va_start(args, format);
+	actualLog(logLevel, format, args);
+	va_end(args);
 }
 
 void Captury_enablePrintf(int on)
