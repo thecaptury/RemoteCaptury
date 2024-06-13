@@ -316,7 +316,7 @@ static inline void unlockMutex(MutexStruct* mtx) RELEASE(mtx)
 }
 #endif
 
-static void log(const char* format, ...)
+static void actualLog(const char* format, va_list args)
 {
 	#ifdef WIN32
 	if (!mutexesInited) {
