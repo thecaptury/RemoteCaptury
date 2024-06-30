@@ -60,3 +60,12 @@ if (ANDROID_NDK_FOUND)
 		DEPENDS RemoteCaptury.cpp RemoteCaptury.h
 	)
 endif(ANDROID_NDK_FOUND)
+
+#
+# add examples
+#
+find_package(Threads REQUIRED)
+
+add_executable(PollingExample examples/polling.cpp)
+target_include_directories(PollingExample PRIVATE ".")
+target_link_libraries(PollingExample RemoteCapturyStatic Threads::Threads)

@@ -22,7 +22,7 @@ cmake --build . -- RemoteCaptury
 ## Using
 
 There are primarily two ways of using the library:
-1. A polling interface allows you to query the most recent pose of a given skeleton. This is fairly straight-forward but like all polling based interfaces introduces either more latency or excessive CPU usage. Use `Captury_getCurrentPose(int actorId)`.
+1. A polling interface allows you to query the most recent pose of a given skeleton. This is fairly straight-forward but like all polling based interfaces introduces either more latency or excessive CPU usage. Use `Captury_getCurrentPose(int actorId)`. This is shown in the `PollingExample`.
 2. You can also register a callback that gets called as soon as a new pose becomes available. This is the recommended way of using RemoteCaptury but can be a bit more complicated as the callback is called from a different thread. Register the callback with `Captury_registerNewPoseCallback(CapturyNewPoseCallback callback)` and be sure your callback finishes quickly because this runs on the socket-communication thread. If this blocks for too long packets may get dropped.
 
 The library also provides a mechanism for synchronizing the clocks of the machine running CapturyLive and the machine running RemoteCaptury. It is recommended that both machines are either not synchronized to NTP or that the NTP client does not do "large" jumps. As this will get the clock synchronization out of step for a few seconds. Enable clock synchronization by calling `Captury_startTimeSynchronizationLoop()` once. Once the clock has locked you can call `Captury_getTime()` to get the current time of the machine running CapturyLive. This is implemented without sending a packet to the machine every time you call this function.
