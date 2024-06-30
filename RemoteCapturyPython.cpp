@@ -59,6 +59,11 @@ static PyObject* synchronizeTime(PyObject *self, PyObject *args)
 	return PyLong_FromLong(Captury_synchronizeTime());
 }
 
+static PyObject* startSyncLoop(PyObject *self, PyObject *args)
+{
+	Captury_startTimeSynchronizationLoop();
+	Py_RETURN_NONE;
+}
 static PyObject* getTime(PyObject *self, PyObject *args)
 {
 	return PyLong_FromLong(Captury_getTime());
@@ -110,9 +115,10 @@ static PyMethodDef pythonVisibleMethods[] = {
 	{"startStreaming", (PyCFunction)startStreaming, METH_VARARGS | METH_KEYWORDS, "starts streaming "},
 	{"startStreamingImages", (PyCFunction)startStreamingImages, METH_VARARGS | METH_KEYWORDS, "Starts streaming data and images"},
 	{"stopStreaming", stopStreaming, METH_NOARGS, "Stops streaming"},
-	{"synchronizeTime", synchronizeTime, METH_NOARGS, "Stops streaming"},
-	{"getTime", getTime, METH_NOARGS, "Stops streaming"},
-	{"getTimeOffset", getTimeOffset, METH_NOARGS, "Stops streaming"},
+	{"synchronizeTime", synchronizeTime, METH_NOARGS, "Synchronize time between remote and local machine once"},
+	{"startSynchronizationLoop", startSyncLoop, METH_NOARGS, "Continuously synchronize time between remote and local machine once"},
+	{"getTime", getTime, METH_NOARGS, "Get time on remote machine"},
+	{"getTimeOffset", getTimeOffset, METH_NOARGS, "Get time difference between remote machine and local machine"},
 	{"snapActor", snapActor, METH_NOARGS, "Tries to track a person at the given location."},
 	{"setShotName", setShotName, METH_VARARGS, "Select the shot with the name (or create new one if it doesn't exist)."},
 	{"startRecording", startRecording, METH_NOARGS, "Start recording."},
