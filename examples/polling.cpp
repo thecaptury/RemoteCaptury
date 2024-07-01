@@ -21,6 +21,7 @@ int main(int argc, char** argv)
 	// Additional flags should be added as required.
 	Captury_startStreaming(CAPTURY_STREAM_POSES | CAPTURY_STREAM_COMPRESSED);
 
+	uint64_t lastTimestamp = 0;
 	while (true) {
 		// get list of actors - otherwise we won't know whom to poll
 		const CapturyActor* actors;
@@ -31,7 +32,10 @@ int main(int argc, char** argv)
 			if (pose == NULL)
 				continue;
 
-
+			if (pose->timestamp != lastTimestamp) {
+				Captury_log(CAPTURY_LOG_INFO, "actor %x has new pose at %zd\n", pose->actor, pose->timestamp);
+				lastTimestamp = pose->timestamp;
+			}
 
 			// make sure to free the pose using the provided function - potential binary incompatibilities between different Microsoft compilers
 			Captury_freePose(pose);
