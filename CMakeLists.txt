@@ -78,4 +78,8 @@ add_executable(CurvesExample examples/curves.cpp)
 target_include_directories(CurvesExample PRIVATE ".")
 target_link_libraries(CurvesExample RemoteCapturyStatic Threads::Threads)
 
-add_custom_target(Examples DEPENDS PollingExample CallbackExample CurvesExample)
+add_executable(SearchExample examples/search.cpp)
+target_include_directories(SearchExample PRIVATE ".")
+target_link_libraries(SearchExample RemoteCapturyStatic Threads::Threads)
+
+add_custom_target(Examples DEPENDS PollingExample CallbackExample CurvesExample SearchExample)

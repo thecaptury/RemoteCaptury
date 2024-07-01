@@ -41,17 +41,37 @@ int main(int argc, char** argv)
 	// Here we stream angle data rather than pose data. This can be easier to process, e.g. in biofeedback applications.
 	// Additional flags should be added as required.
 	uint16_t angles[] = {CAPTURY_LEFT_KNEE_FLEXION_EXTENSION, CAPTURY_RIGHT_KNEE_FLEXION_EXTENSION};
-	Captury_startStreamingImagesAndAngles(CAPTURY_STREAM_ANGLES, /*camera*/-1, 2, angles);
+	Captury_startStreamingImagesAndAngles(CAPTURY_STREAM_POSES | CAPTURY_STREAM_ANGLES, /*camera*/-1, 2, angles);
 
 	#ifdef WIN32
 	Sleep(100000);
 	#else
-	usleep(100000*1000);
+	usleep(10000*1000);
 	#endif
 
 	// instead of the callback approach you can also use polling like this:
-	// int numAngles;
-	// CapturyAngleData* angles = Captury_getCurrentAngles(actorId, &numAngles);
+	uint64_t lastTimestamp = 0;
+	while (true) {
+		// get list of actors - otherwise we won't know whom to poll
+		const CapturyActor* actors;
+		int numActors = Captury_getActors(&actors);
+
+		for (int i = 0; i < numActors; ++i) {
+			int numAngles;
+			CapturyAngleData* angles = Captury_getCurrentAngles(actors[i].id, &numAngles);
+			if (angles == NULL)
+				continue;
+
+			for (int n = 0; n < numAngles; ++n)
+				Captury_log(CAPTURY_LOG_INFO, "actor %x has new angle %d: %g\n", actors[i].id, angles[n].type, angles[n].value);
+		}
+
+		#ifdef WIN32
+		Sleep(20);
+		#else
+		usleep(20*1000);
+		#endif
+	}
 
 	Captury_stopStreaming();
 
