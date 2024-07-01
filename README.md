@@ -12,11 +12,19 @@ We use CMake for configuring the build process. There are two main targets `Remo
 If Python3 is available the additional target `RemoteCapturyPython` can be built.
 If the Android NDK can be found `RemoteCapturyAndroid` can also be built. This last target actually builds four versions of the RemoteCaptury library for the following platforms: `arm64-v8a`, `armeabi-v7a`, `x86`, and `x86_64`.
 
+Here are the quickstart commands:
+
 ```
 git clone https://github.com/thecaptury/RemoteCaptury.git
 mkdir RemoteCaptury/build && cd RemoteCaptury/build
 cmake ..
 cmake --build . -- RemoteCaptury
+```
+
+You can build all examples like this:
+
+```
+cmake --build . -- Examples
 ```
 
 ## Using
