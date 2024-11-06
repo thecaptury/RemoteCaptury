@@ -60,3 +60,26 @@ if (ANDROID_NDK_FOUND)
 		DEPENDS RemoteCaptury.cpp RemoteCaptury.h
 	)
 endif(ANDROID_NDK_FOUND)
+
+#
+# add examples
+#
+find_package(Threads REQUIRED)
+
+add_executable(PollingExample examples/polling.cpp)
+target_include_directories(PollingExample PRIVATE ".")
+target_link_libraries(PollingExample RemoteCapturyStatic Threads::Threads)
+
+add_executable(CallbackExample examples/callback.cpp)
+target_include_directories(CallbackExample PRIVATE ".")
+target_link_libraries(CallbackExample RemoteCapturyStatic Threads::Threads)
+
+add_executable(CurvesExample examples/curves.cpp)
+target_include_directories(CurvesExample PRIVATE ".")
+target_link_libraries(CurvesExample RemoteCapturyStatic Threads::Threads)
+
+add_executable(SearchExample examples/search.cpp)
+target_include_directories(SearchExample PRIVATE ".")
+target_link_libraries(SearchExample RemoteCapturyStatic Threads::Threads)
+
+add_custom_target(Examples DEPENDS PollingExample CallbackExample CurvesExample SearchExample)
