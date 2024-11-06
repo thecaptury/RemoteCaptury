@@ -1264,7 +1264,7 @@ static void deleteActors()
 }
 
 #ifdef WIN32
-static DWORD WINAPI receiveLoop(void* arg)
+static DWORD WINAPI receiveLoop(void* /*arg*/)
 #else
 static void* receiveLoop(void* arg)
 #endif
@@ -1515,7 +1515,7 @@ static void* streamLoop(void* arg)
 		CapturyPosePacket* cpp = (CapturyPosePacket*)buffer.data();
 
 		// first peek to find out which packet type this is
-		int size = recv(streamSock, buffer.data(), buffer.size(), 0);
+		int size = recv(streamSock, buffer.data(), (int)buffer.size(), 0);
 //		log("received stream packet size %d (%d %d)\n", (int) size, cpp->type, cpp->size);
 		if (size == 0) { // the other end shut down the socket...
 			lastErrorMessage = "Stream socket closed unexpectedly";
@@ -1974,7 +1974,7 @@ extern "C" int Captury_disconnect()
 	bool closedOrStopped = false;
 	if (sock != -1) {
 		closesocket(sock);
-		sock = -1;
+		sock = (SOCKET)-1;
 		closedOrStopped = true;
 	}
 
