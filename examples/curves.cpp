@@ -66,6 +66,8 @@ int main(int argc, char** argv)
 				Captury_log(CAPTURY_LOG_INFO, "actor %x has new angle %d: %g\n", actors[i].id, angles[n].type, angles[n].value);
 		}
 
+		// potentially Captury_freeActors() here
+
 		#ifdef WIN32
 		Sleep(20);
 		#else

@@ -36,6 +36,9 @@ void actorChangedCallback(int actorId, int mode)
 
 	const CapturyActor* actor = Captury_getActor(actorId);
 	// do something with it
+
+	// free it
+	Captury_freeActor(actor);
 }
 
 int main(int argc, char** argv)
@@ -99,6 +102,8 @@ int main(int argc, char** argv)
 			// try to find a new actor at the location (1m, 1m) with any orientation (500 > 360deg)
 			Captury_snapActor(-1000.0f, 0.0f, 500.0f);
 		}
+
+		// potentially Captury_freeActors() here
 
 		// sleep 1 second
 		#ifdef WIN32
