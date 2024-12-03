@@ -39,7 +39,7 @@ CAPTURY_DLL_EXPORT int Captury_getConnectionStatus();
 
 
 // returns the number of actors
-// on exit *cameras points to an array of CapturyCamera
+// on exit *actors points to an array of CapturyCamera
 // the array is owned by the library - do not free
 CAPTURY_DLL_EXPORT int Captury_getActors(const CapturyActor** actors);
 
