@@ -36,6 +36,9 @@ void actorChangedCallback(int actorId, int mode)
 
 	const CapturyActor* actor = Captury_getActor(actorId);
 	// do something with it
+
+	// free it
+	Captury_freeActor(actor);
 }
 
 int main(int argc, char** argv)

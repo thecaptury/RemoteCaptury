@@ -142,8 +142,10 @@ typedef std::shared_ptr<CapturyActor> CapturyActor_p;
 
 // actor id -> pointer to actor
 static std::unordered_map<int, CapturyActor_p> actorsById GUARDED_BY(mutex);
+static std::unordered_map<const CapturyActor*, CapturyActor_p> returnedActors GUARDED_BY(mutex);
 static std::unordered_map<int, CapturyActor_p> partialActors GUARDED_BY(partialActorMutex); // actors that have been received in part
-static std::vector<CapturyActor> actorPointers; // used by Captury_getActors()
+static std::vector<CapturyActor> actorPointers GUARDED_BY(mutex); // used by Captury_getActors()
+static std::vector<CapturyActor_p> actorSharedPointers GUARDED_BY(mutex); // used by Captury_getActors()
 
 static std::unordered_map<int, std::vector<CapturyAngleData>> currentAngles;
 
@@ -1064,7 +1066,7 @@ static bool receive(SOCKET& sok)
 		case capturyActorBlendShapes: {
 			CapturyActorBlendShapesPacket* cabs = (CapturyActorBlendShapesPacket*)p;
 			lockMutex(&mutex);
-			std::shared_ptr<CapturyActor> actor = actorsById[cabs->actorId];
+			CapturyActor_p actor = actorsById[cabs->actorId];
 			actor->numBlendShapes = cabs->numBlendShapes;
 			actor->blendShapes = new CapturyBlendShape[actor->numBlendShapes];
 			char* at = cabs->blendShapeNames;
@@ -1354,7 +1356,9 @@ static void receivedPose(CapturyPose* pose, int actorId, ActorData* aData, uint6
 	}
 
 	if (newPoseCallback != NULL && actorsById.count(actorId)) {
-		CapturyActor* actor = actorsById[actorId].get();
+		CapturyActor_p a = actorsById[actorId];
+		CapturyActor* actor = a.get();
+		returnedActors[actor] = a;
 		unlockMutex(&mutex);
 		newPoseCallback(actor, pose, aData->trackingQuality);
 		lockMutex(&mutex);
@@ -1834,14 +1838,15 @@ static void* streamLoop(void* arg)
 			at = (int)((char*)(((CapturyPosePacket2*)cpp)->values) - (char*)cpp);
 		}
 
-		int numTransforms = std::min<int>(numValues / 6, actorsById[cpp->actor]->numJoints);
-		int numBlendShapes = std::min<int>(numValues - numTransforms*6, actorsById[cpp->actor]->numBlendShapes);
+		CapturyActor* actor = actorsById[cpp->actor].get();
+		int numTransforms = std::min<int>(numValues / 6, actor->numJoints);
+		int numBlendShapes = std::min<int>(numValues - numTransforms*6, actor->numBlendShapes);
 
-		if (actorsById.count(cpp->actor) != 0 && actorsById[cpp->actor]->numJoints * 6 + actorsById[cpp->actor]->numBlendShapes != numValues) {
-			if (actorsById[cpp->actor]->numJoints * 6 == numValues)
+		if (actorsById.count(cpp->actor) != 0 && actor->numJoints * 6 + actor->numBlendShapes != numValues) {
+			if (actor->numJoints * 6 == numValues)
 				numBlendShapes = 0;
 			else {
-				log("expected %d+%d dofs, got %d\n", actorsById[cpp->actor]->numJoints * 6, actorsById[cpp->actor]->numBlendShapes, numValues);
+				log("expected %d+%d dofs, got %d\n", actor->numJoints * 6, actor->numBlendShapes, numValues);
 				unlockMutex(&mutex);
 				continue;
 			}
@@ -1883,7 +1888,7 @@ static void* streamLoop(void* arg)
 				memcpy(it->second.currentPose.blendShapeActivations, values + numTransforms*6, numBlendShapes*sizeof(float));
 			done = true;
 		} else if ((cpp->type == capturyCompressedPose || cpp->type == capturyCompressedPose2) && numBytesToCopy == (numTransforms-1)*10 + 13 + numBlendShapes * 2) {
-			decompressPose(&it->second.currentPose, (uint8_t*)values, actorsById[cpp->actor].get());
+			decompressPose(&it->second.currentPose, (uint8_t*)values, actor);
 			done = true;
 		} else {// partial
 			if (it->second.inProgress[inProgressIndex].pose == NULL)
@@ -2033,11 +2038,14 @@ extern "C" int Captury_getActors(const CapturyActor** actrs)
 
 	actorPointers.clear();
 	actorPointers.reserve(actorsById.size());
+	actorSharedPointers.clear();
+	actorSharedPointers.reserve(actorsById.size());
 
 	int numActors = 0;
 	for (auto& it : actorsById) {
 		if (actorData[it.first].status != ACTOR_DELETED) {
 			actorPointers.push_back(*it.second.get());
+			actorSharedPointers.push_back(it.second);
 			++numActors;
 		}
 	}
@@ -2046,6 +2054,16 @@ extern "C" int Captury_getActors(const CapturyActor** actrs)
 	unlockMutex(&mutex);
 
 	return numActors;
+}
+
+extern "C" void Captury_freeActors()
+{
+	lockMutex(&mutex);
+
+	actorPointers.clear();
+	actorSharedPointers.clear();
+
+	unlockMutex(&mutex);
 }
 
 // returns the actor if found or NULL if not
@@ -2063,10 +2081,18 @@ extern "C" const CapturyActor* Captury_getActor(int id)
 		return NULL;
 	}
 
-	CapturyActor* ret = actorsById[id].get();
+	CapturyActor_p ret = actorsById[id];
+	returnedActors[ret.get()] = ret;
 	unlockMutex(&mutex);
 
-	return ret;
+	return ret.get();
+}
+
+extern "C" void Captury_freeActor(const CapturyActor* actor)
+{
+	auto it = returnedActors.find(actor);
+	if (it != returnedActors.end())
+		returnedActors.erase(it);
 }
 
 // returns the number of cameras
