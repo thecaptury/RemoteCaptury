@@ -39,13 +39,20 @@ CAPTURY_DLL_EXPORT int Captury_getConnectionStatus();
 
 
 // returns the number of actors
-// on exit *actors points to an array of CapturyCamera
-// the array is owned by the library - do not free
+// on exit *actors points to an array of CapturyActor*
+// the array is valid until the next call of Captury_getActors() or Captury_freeActors()
+// free using Captury_freeActors()
 CAPTURY_DLL_EXPORT int Captury_getActors(const CapturyActor** actors);
 
 // returns the actor or NULL if it is not known
-// the struct is owned by the library - do not free
+// free using Captury_freeActor()
 CAPTURY_DLL_EXPORT const CapturyActor* Captury_getActor(int actorId);
+
+// free an actor returned by Captury_getActor()
+CAPTURY_DLL_EXPORT void Captury_freeActor(const CapturyActor* actor);
+
+// free all actors returned by Captury_getActors()
+CAPTURY_DLL_EXPORT void Captury_freeActors();
 
 // returns the number of cameras
 // on exit *cameras points to an array of CapturyCamera
