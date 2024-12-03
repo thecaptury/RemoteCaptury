@@ -243,6 +243,8 @@ CAPTURY_DLL_EXPORT uint64_t Captury_getTime();
 // offset = CapturyLive.time - local.time
 CAPTURY_DLL_EXPORT int64_t Captury_getTimeOffset();
 
+// returns the current tracking framerate
+CAPTURY_DLL_EXPORT void Captury_getFramerate(int* numerator, int* denominator);
 
 // get the last error message
 CAPTURY_DLL_EXPORT char* Captury_getLastErrorMessage();
@@ -449,6 +451,8 @@ typedef enum { capturyActors = 1, capturyActor = 2,
 	       capturyMessage = 75,
 	       capturyEnableRemoteLogging = 76,
 	       capturyDisableRemoteLogging = 77,
+	       capturyGetFramerate = 78,
+	       capturyFramerate = 79,
 	       capturyError = 0 } CapturyPacketTypes;
 
 // returns a string for nicer error messages
@@ -918,6 +922,15 @@ struct CapturyLogPacket {
 
 	uint8_t		logLevel;
 	char		message[];
+};
+
+// sent to client
+struct CapturyFrameratePacket {
+	int32_t		type;	// capturyFramerate
+	int32_t		size;	// size of full message including type and size
+
+	int		numerator;
+	int		denominator;
 };
 
 #pragma pack(pop)

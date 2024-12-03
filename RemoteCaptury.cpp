@@ -158,6 +158,9 @@ static uint64_t dataReceivedTime;
 static uint64_t mostRecentPoseReceivedTime; // time pose was received
 static uint64_t mostRecentPoseReceivedTimestamp; // timestamp of that pose
 
+static int framerateNumerator = -1.0f;
+static int framerateDenominator = -1.0f;
+
 const char* CapturyActorStatusString[] = {"scaling", "tracking", "stopped", "deleted", "unknown"};
 
 struct ActorData {
@@ -550,6 +553,10 @@ const char* Captury_getHumanReadableMessageType(CapturyPacketTypes type)
 		return "<enable remote logging>";
 	case capturyError:
 		return "<error>";
+	case capturyGetFramerate:
+		return "<get framerate>";
+	case capturyFramerate:
+		return "<framerate>";
 	}
 	return "<unknown message type>";
 }
@@ -1120,6 +1127,11 @@ static bool receive(SOCKET& sok)
 				syncSamples.erase(syncSamples.begin());
 			updateSync(t);
 			log("local: %" PRIu64 " remote: %" PRIu64 " => offset %" PRId64 ", roundtrip %" PRId64 "\n", t, tp->timestamp, tp->timestamp - t, pongTime - pingTime);
+			break; }
+		case capturyFramerate: {
+			CapturyFrameratePacket* fp = (CapturyFrameratePacket*)p;
+			framerateNumerator = fp->numerator;
+			framerateDenominator = fp->denominator;
 			break; }
 		case capturyCustom: {
 			CapturyCustomPacket* ccp = (CapturyCustomPacket*)p;
@@ -2605,6 +2617,22 @@ extern "C" int64_t Captury_getTimeOffset()
 	int64_t offset = (int64_t)currentSync.offset;
 	unlockMutex(&syncMutex);
 	return offset;
+}
+
+extern "C" void Captury_getFramerate(int* numerator, int* denominator)
+{
+	CapturyRequestPacket packet;
+	packet.type = capturyGetFramerate;
+	packet.size = sizeof(packet);
+
+	if (!sendPacket((CapturyRequestPacket*)&packet, capturyFramerate)) {
+		*numerator = -1;
+		*denominator = -1;
+		return;
+	}
+
+	*numerator = framerateNumerator;
+	*denominator = framerateDenominator;
 }
 
 extern "C" int Captury_setHalfplaneConstraint(int actorId, int jointIndex, float* originOffset, float* normal, float offset, uint64_t timestamp, float weight)
