@@ -258,8 +258,8 @@ static void* arTagArg = NULL;
 static CapturyImageCallback imageCallback = NULL;
 static void* imageArg = NULL;
 
-static bool		handshakeFinished = false;
-static bool		isStreamThreadRunning = false;
+static volatile bool	handshakeFinished = false;
+static volatile bool	isStreamThreadRunning = false;
 static SOCKET		sock = -1;
 
 static volatile int	stopStreamThread = 0; // stop streaming thread
@@ -324,6 +324,8 @@ static inline void unlockMutex(MutexStruct* mtx) RELEASE(mtx)
 {
 	mtx->unlock();
 }
+// #define unlockMutex(mtx)	printf("unlocked %p at %d\n", mtx, __LINE__); (mtx)->unlock()
+// #define lockMutex(mtx)		printf("  locked %p at %d\n", mtx, __LINE__); (mtx)->lock()
 #endif
 
 static void actualLog(int logLevel, const char* format, va_list args)
@@ -1386,6 +1388,7 @@ static void receivedPose(CapturyPose* pose, int actorId, ActorData* aData, uint6
 	unlockMutex(&mutex);
 	for (int id : stoppedActorIds)
 		actorChangedCallback(id, ACTOR_STOPPED, actorChangedArg);
+	lockMutex(&mutex);
 }
 
 static void decompressPose(CapturyPose* pose, uint8_t* v, CapturyActor* actor)
@@ -1949,6 +1952,9 @@ extern "C" int Captury_connect2(const char* ip, unsigned short port, unsigned sh
 		return 0;
 #endif
 
+	if (sock != -1)
+		Captury_disconnect();
+
 	localAddress.sin_family = AF_INET;
 	localAddress.sin_addr.s_addr = htonl(INADDR_ANY);
 	localAddress.sin_port = htons(localPort);
@@ -1994,11 +2000,6 @@ extern "C" int Captury_connect2(const char* ip, unsigned short port, unsigned sh
 extern "C" int Captury_disconnect()
 {
 	bool closedOrStopped = false;
-	if (sock != -1) {
-		closesocket(sock);
-		sock = (SOCKET)-1;
-		closedOrStopped = true;
-	}
 
 	if (!stopReceiving) {
 		handshakeFinished = false;
@@ -2019,6 +2020,12 @@ extern "C" int Captury_disconnect()
 		pthread_join(streamThread, &retVal);
 		#endif
 
+		closedOrStopped = true;
+	}
+
+	if (sock != -1) {
+		closesocket(sock);
+		sock = (SOCKET)-1;
 		closedOrStopped = true;
 	}
 
@@ -2118,11 +2125,16 @@ extern "C" int Captury_getCameras(const CapturyCamera** cams)
 		sleepMicroSeconds(10000);
 	}
 
-	if (cameras.size() > 0)
-		*cams = &cameras[0];
-	else
+	static std::vector<CapturyCamera> camerasBuffer;
+	lockMutex(&mutex);
+	camerasBuffer = cameras;
+	unlockMutex(&mutex);
+
+	if (camerasBuffer.empty())
 		*cams = NULL;
-	return (int)cameras.size();
+	else
+		*cams = &camerasBuffer[0];
+	return (int)camerasBuffer.size();
 }
 
 // get the last error message
