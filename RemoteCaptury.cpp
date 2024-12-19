@@ -2111,11 +2111,12 @@ extern "C" int Captury_getCameras(const CapturyCamera** cams)
 	packet.type = capturyCameras;
 	packet.size = sizeof(packet);
 
-	numCameras = -1;
-	cameras.clear();
+	if (numCameras == -1) {
+		if (!sendPacket(&packet, capturyCameras))
+			return 0;
 
-	if (!sendPacket(&packet, capturyCameras))
-		return 0;
+		sleepMicroSeconds(10000);
+	}
 
 	if (cameras.size() > 0)
 		*cams = &cameras[0];
