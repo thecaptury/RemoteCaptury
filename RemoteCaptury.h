@@ -192,7 +192,7 @@ typedef void (*CapturyARTagCallback)(int num, CapturyARTag*, void* userArg);
 // register callback that will be called when an artag is detected
 // pass NULL if you want to deregister the callback
 // returns 1 if successful otherwise 0
-CAPTURY_DLL_EXPORT int Captury_registerARTagCallback(CapturyARTagCallback callback);
+CAPTURY_DLL_EXPORT int Captury_registerARTagCallback(CapturyARTagCallback callback, void* userArg);
 
 // returns an array of artags followed by one where the id is -1
 // Captury_freeARTags() after use
@@ -206,7 +206,7 @@ typedef void (*CapturyImageCallback)(const CapturyImage* img, void* userArg);
 // register callback that will be called when a new frame was streamed from this particular camera
 // pass NULL to deregister
 // returns 1 if successfull otherwise 0
-CAPTURY_DLL_EXPORT int Captury_registerImageStreamingCallback(CapturyImageCallback callback);
+CAPTURY_DLL_EXPORT int Captury_registerImageStreamingCallback(CapturyImageCallback callback, void* userArg);
 
 // may return NULL if no image has been received yet
 // use Captury_freeImage to free after use

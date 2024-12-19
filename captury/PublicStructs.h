@@ -1,4 +1,5 @@
-#pragma once
+#ifndef CAPTURY_PUBLIC_STRUCTS
+#define CAPTURY_PUBLIC_STRUCTS
 
 #include <stdint.h>
 
@@ -131,3 +132,5 @@ struct CapturyLatencyInfo {
 };
 
 #pragma pack(pop)
+
+#endif
