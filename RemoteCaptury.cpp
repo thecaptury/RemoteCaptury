@@ -160,8 +160,8 @@ static uint64_t dataReceivedTime;
 static uint64_t mostRecentPoseReceivedTime; // time pose was received
 static uint64_t mostRecentPoseReceivedTimestamp; // timestamp of that pose
 
-static int framerateNumerator = -1.0f;
-static int framerateDenominator = -1.0f;
+static int framerateNumerator = -1;
+static int framerateDenominator = -1;
 
 const char* CapturyActorStatusString[] = {"scaling", "tracking", "stopped", "deleted", "unknown"};
 
@@ -356,7 +356,7 @@ static void actualLog(int logLevel, const char* format, va_list args)
 	if (doRemoteLogging && sock != -1) {
 		CapturyLogPacket* lp = (CapturyLogPacket*)buffer;
 		lp->type = capturyMessage;
-		lp->size = 9 + strlen(buffer + 9) + 1;
+		lp->size = 9 + (int32_t)strlen(buffer + 9) + 1;
 		lp->logLevel = logLevel;
 		send(sock, (const char*)lp, lp->size, 0);
 	}
@@ -679,9 +679,9 @@ void computeSync(Sync& s)
 		int64_t sumAsqr = 0;
 		int64_t sumAB = 0;
 		for (SyncSample& ss : syncSamples) {
-			int64_t a = ss.localT - meanLocalT;
+			int64_t a = (int64_t)(ss.localT - meanLocalT);
 			sumAsqr += a*a;
-			int64_t b = ss.remoteT - ss.localT - medianOffset;
+			int64_t b = (int64_t)(ss.remoteT - ss.localT - medianOffset);
 			sumAB += a*b;
 		}
 		s.factor = sumAB / (double)sumAsqr;
@@ -874,7 +874,7 @@ static bool receive(SOCKET& sok)
 					return false;
 				}
 				at += size;
-				toGet = std::min<int>(p->size, buffer.size()) - at;
+				toGet = std::min<int>(p->size, (int)buffer.size()) - at;
 			}
 			size = std::min<int>(p->size, buffer.size());
 		}
@@ -1296,6 +1296,8 @@ static void* receiveLoop(void* arg)
 		if (!receive(sock)) {
 			if (sock == -1) {
 				deleteActors();
+				cameras.clear();
+				numCameras = -1;
 
 				if (isStreamThreadRunning) {
 					stopStreamThread = 1;
@@ -2030,6 +2032,8 @@ extern "C" int Captury_disconnect()
 	}
 
 	deleteActors();
+	cameras.clear();
+	numCameras = -1;
 
 	return closedOrStopped ? 1 : 0;
 }
