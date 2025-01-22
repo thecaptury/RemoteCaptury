@@ -2106,9 +2106,11 @@ extern "C" const CapturyActor* Captury_getActor(int id)
 
 extern "C" void Captury_freeActor(const CapturyActor* actor)
 {
+	lockMutex(&mutex);
 	auto it = returnedActors.find(actor);
 	if (it != returnedActors.end())
 		returnedActors.erase(it);
+	unlockMutex(&mutex);
 }
 
 // returns the number of cameras
