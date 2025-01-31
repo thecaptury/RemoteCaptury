@@ -741,6 +741,205 @@ extern "C" uint64_t Captury_getTime()
 	return getRemoteTime(getTime());
 }
 
+static void receivedPose(CapturyPose* pose, int actorId, ActorData* aData, uint64_t timestamp) REQUIRES(mutex)
+{
+	if (aData->status == ACTOR_DELETED)
+		return;
+
+	if (getLocalPoses)
+		Captury_convertPoseToLocal(pose, actorId);
+
+	pose->timestamp = timestamp;
+
+	uint64_t now = getTime();
+	// log("received pose %ld at %ld, diff %ld\n", pose->timestamp, now, now - aData->lastPoseTimestamp);
+	aData->lastPoseTimestamp = now;
+
+	mostRecentPoseReceivedTime = getRemoteTime(now);
+	mostRecentPoseReceivedTimestamp = timestamp;
+
+	if (aData->status != ACTOR_SCALING && aData->status != ACTOR_TRACKING) {
+		aData->status = ACTOR_TRACKING;
+		if (actorChangedCallback) {
+			unlockMutex(&mutex);
+			actorChangedCallback(actorId, ACTOR_TRACKING, actorChangedArg);
+			lockMutex(&mutex);
+		}
+	}
+
+	if (newPoseCallback != NULL && actorsById.count(actorId)) {
+		CapturyActor_p a = actorsById[actorId];
+		CapturyActor* actor = a.get();
+		returnedActors[actor] = a;
+		unlockMutex(&mutex);
+		newPoseCallback(actor, pose, aData->trackingQuality, newPoseArg);
+		lockMutex(&mutex);
+	}
+
+	// mark actors as stopped if no data was received for a while
+	now -= 500000; // half a second ago
+	std::vector<int> stoppedActorIds;
+	for (std::unordered_map<int, ActorData>::iterator it = actorData.begin(); it != actorData.end(); ++it) {
+		if (it->second.lastPoseTimestamp > now) // still current
+			continue;
+
+		if (it->second.status == ACTOR_SCALING || it->second.status == ACTOR_TRACKING) {
+			if (actorChangedCallback)
+				stoppedActorIds.push_back(it->first);
+			it->second.status = ACTOR_STOPPED;
+		}
+	}
+
+	unlockMutex(&mutex);
+	for (int id : stoppedActorIds)
+		actorChangedCallback(id, ACTOR_STOPPED, actorChangedArg);
+	lockMutex(&mutex);
+}
+
+static void decompressPose(CapturyPose* pose, uint8_t* v, CapturyActor* actor)
+{
+	float* copyTo = (float*)pose->transforms;
+	float* values = (float*)pose->transforms;
+	int numJoints = (actor->numJoints < pose->numTransforms) ? actor->numJoints : pose->numTransforms;
+	for (int i = 0; i < numJoints; ++i) {
+		if (i == 0) {
+			int32_t t = v[0] | (v[1] << 8) | (v[2] << 16);
+			if ((t & 0x800000) != 0)
+				t |= 0xFF000000;
+			copyTo[0] = t * 0.0625f;
+			v += 3;
+			t = v[0] | (v[1] << 8) | (v[2] << 16);
+			if ((t & 0x800000) != 0)
+				t |= 0xFF000000;
+			copyTo[1] = t * 0.0625f;
+			v += 3;
+			t = v[0] | (v[1] << 8) | (v[2] << 16);
+			if ((t & 0x800000) != 0)
+				t |= 0xFF000000;
+			copyTo[2] = t * 0.0625f;
+			v += 3;
+		} else {
+			int32_t t = v[0] | (v[1] << 8);
+			if ((t & 0x8000) != 0)
+				t |= 0xFFFF0000;
+			copyTo[0] = t * 0.0625f + values[actor->joints[i].parent*6];
+			v += 2;
+			t = v[0] | (v[1] << 8);
+			if ((t & 0x8000) != 0)
+				t |= 0xFFFF0000;
+			copyTo[1] = t * 0.0625f + values[actor->joints[i].parent*6+1];
+			v += 2;
+			t = v[0] | (v[1] << 8);
+			if ((t & 0x8000) != 0)
+				t |= 0xFFFF0000;
+			copyTo[2] = t * 0.0625f + values[actor->joints[i].parent*6+2];
+			v += 2;
+		}
+
+		// decompress rotation
+		uint32_t rall = *(uint32_t*)v;
+		v += 4;
+		copyTo[3] = ((rall & 0x000007FF))       * (360.0f / 2047) - 180.0f;
+		copyTo[4] = ((rall & 0x003FF800) >> 11) * (360.0f / 2047) - 180.0f;
+		copyTo[5] = ((rall & 0xFFC00000) >> 22) * (180.0f / 1023);
+		copyTo += 6;
+	}
+
+	for (int i = 0; i < pose->numBlendShapes; ++i, v += 2)
+		pose->blendShapeActivations[i] = (*(uint16_t*)v) / 32768.0f;
+}
+
+static void receivedPosePacket(CapturyPosePacket* cpp)
+{
+	lockMutex(&mutex);
+	if (actorsById.count(cpp->actor) == 0) {
+		char buff[400];
+		snprintf(buff, 400, "Actor %x does not exist", cpp->actor);
+		lastErrorMessage = buff;
+		unlockMutex(&mutex);
+		return;
+	}
+
+	int numValues;
+	float* values;
+	int at;
+	if (cpp->type == capturyPose || cpp->type == capturyCompressedPose) {
+		// log("actor %x: %d values: %g\n", cpp->actor, cpp->numValues, cpp->values[0]);
+		numValues = cpp->numValues;
+		values = cpp->values;
+		at = (int)((char*)(cpp->values) - (char*)cpp);
+	} else { // capturyPose2 || capturyCompressedPose2
+		numValues = ((CapturyPosePacket2*)cpp)->numValues;
+		values = ((CapturyPosePacket2*)cpp)->values;
+		at = (int)((char*)(((CapturyPosePacket2*)cpp)->values) - (char*)cpp);
+	}
+
+	CapturyActor* actor = actorsById[cpp->actor].get();
+	int numTransforms = std::min<int>(numValues / 6, actor->numJoints);
+	int numBlendShapes = std::min<int>(numValues - numTransforms*6, actor->numBlendShapes);
+
+	if (actorsById.count(cpp->actor) != 0 && actor->numJoints * 6 + actor->numBlendShapes != numValues) {
+		if (actor->numJoints * 6 == numValues)
+			numBlendShapes = 0;
+		else {
+			log("expected %d+%d dofs, got %d\n", actor->numJoints * 6, actor->numBlendShapes, numValues);
+			unlockMutex(&mutex);
+			return;
+		}
+	}
+
+	std::unordered_map<int, ActorData>::iterator it = actorData.find(cpp->actor);
+	if (it == actorData.end() || (it->second.currentPose.numTransforms == 0 && it->second.currentPose.numBlendShapes == 0)) {
+		it = actorData.insert(std::make_pair(cpp->actor, ActorData())).first;
+		it->second.currentPose.actor = cpp->actor;
+		it->second.currentPose.numTransforms = numTransforms;
+		it->second.currentPose.transforms = (numTransforms != 0) ? new CapturyTransform[numTransforms] : nullptr;
+		it->second.currentPose.numBlendShapes = numBlendShapes;
+		it->second.currentPose.blendShapeActivations = (numBlendShapes != 0) ? new float[numBlendShapes] : nullptr;
+	}
+
+	if (cpp->type == capturyPose2 || cpp->type == capturyCompressedPose2) {
+		it->second.scalingProgress = ((CapturyPosePacket2*)cpp)->scalingProgress;
+		it->second.trackingQuality = ((CapturyPosePacket2*)cpp)->trackingQuality;
+		it->second.flags = ((CapturyPosePacket2*)cpp)->flags;
+	}
+
+	// select oldest in-progress item
+	int inProgressIndex = 0;
+	uint64_t oldest = 0xFFFFFFFFFFFFFFFF;
+	for (int x = 0; x < 4; ++x) {
+		if (it->second.inProgress[x].timestamp < oldest) {
+			oldest = it->second.inProgress[x].timestamp;
+			inProgressIndex = x;
+		}
+	}
+
+	// either copy to currentPose or inProgress pose
+	int numBytesToCopy = cpp->size - at;
+	bool done = false;
+	if ((cpp->type == capturyPose || cpp->type == capturyPose2) && numBytesToCopy == (int)((numTransforms*6 + numBlendShapes)*sizeof(float))) {
+		if (numTransforms != 0)
+			memcpy(it->second.currentPose.transforms, values, numTransforms*6*sizeof(float));
+		if (numBlendShapes != 0)
+			memcpy(it->second.currentPose.blendShapeActivations, values + numTransforms*6, numBlendShapes*sizeof(float));
+		done = true;
+	} else if ((cpp->type == capturyCompressedPose || cpp->type == capturyCompressedPose2) && numBytesToCopy == (numTransforms-1)*10 + 13 + numBlendShapes * 2) {
+		decompressPose(&it->second.currentPose, (uint8_t*)values, actor);
+		done = true;
+	} else {// partial
+		if (it->second.inProgress[inProgressIndex].pose == NULL)
+			it->second.inProgress[inProgressIndex].pose = new float[numValues];
+		memcpy(it->second.inProgress[inProgressIndex].pose, values, numBytesToCopy);
+		it->second.inProgress[inProgressIndex].bytesDone = numBytesToCopy;
+		it->second.inProgress[inProgressIndex].timestamp = cpp->timestamp;
+	}
+
+	if (done)
+		receivedPose(&it->second.currentPose, cpp->actor, &it->second, cpp->timestamp);
+
+	unlockMutex(&mutex);
+}
+
 static SOCKET openTcpSocket()
 {
 	log("opening TCP socket\n");
@@ -1109,7 +1308,9 @@ static bool receive(SOCKET& sok)
 			break; }
 		case capturyPose:
 		case capturyPose2:
-			log("received pose on control socket\n");
+		case capturyCompressedPose:
+		case capturyCompressedPose2:
+			receivedPosePacket((CapturyPosePacket*)buffer.data());
 			break;
 		case capturyDaySessionShot: {
 			CapturyDaySessionShotPacket* dss = (CapturyDaySessionShotPacket*)p;
@@ -1334,114 +1535,6 @@ static bool sendPacket(CapturyRequestPacket* packet, CapturyPacketTypes expected
 		return false;
 
 	return true;
-}
-
-static void receivedPose(CapturyPose* pose, int actorId, ActorData* aData, uint64_t timestamp) REQUIRES(mutex)
-{
-	if (aData->status == ACTOR_DELETED)
-		return;
-
-	if (getLocalPoses)
-		Captury_convertPoseToLocal(pose, actorId);
-
-	pose->timestamp = timestamp;
-
-	uint64_t now = getTime();
-	// log("received pose %ld at %ld, diff %ld\n", pose->timestamp, now, now - aData->lastPoseTimestamp);
-	aData->lastPoseTimestamp = now;
-
-	mostRecentPoseReceivedTime = getRemoteTime(now);
-	mostRecentPoseReceivedTimestamp = timestamp;
-
-	if (aData->status != ACTOR_SCALING && aData->status != ACTOR_TRACKING) {
-		aData->status = ACTOR_TRACKING;
-		if (actorChangedCallback) {
-			unlockMutex(&mutex);
-			actorChangedCallback(actorId, ACTOR_TRACKING, actorChangedArg);
-			lockMutex(&mutex);
-		}
-	}
-
-	if (newPoseCallback != NULL && actorsById.count(actorId)) {
-		CapturyActor_p a = actorsById[actorId];
-		CapturyActor* actor = a.get();
-		returnedActors[actor] = a;
-		unlockMutex(&mutex);
-		newPoseCallback(actor, pose, aData->trackingQuality, newPoseArg);
-		lockMutex(&mutex);
-	}
-
-	// mark actors as stopped if no data was received for a while
-	now -= 500000; // half a second ago
-	std::vector<int> stoppedActorIds;
-	for (std::unordered_map<int, ActorData>::iterator it = actorData.begin(); it != actorData.end(); ++it) {
-		if (it->second.lastPoseTimestamp > now) // still current
-			continue;
-
-		if (it->second.status == ACTOR_SCALING || it->second.status == ACTOR_TRACKING) {
-			if (actorChangedCallback)
-				stoppedActorIds.push_back(it->first);
-			it->second.status = ACTOR_STOPPED;
-		}
-	}
-
-	unlockMutex(&mutex);
-	for (int id : stoppedActorIds)
-		actorChangedCallback(id, ACTOR_STOPPED, actorChangedArg);
-	lockMutex(&mutex);
-}
-
-static void decompressPose(CapturyPose* pose, uint8_t* v, CapturyActor* actor)
-{
-	float* copyTo = (float*)pose->transforms;
-	float* values = (float*)pose->transforms;
-	int numJoints = (actor->numJoints < pose->numTransforms) ? actor->numJoints : pose->numTransforms;
-	for (int i = 0; i < numJoints; ++i) {
-		if (i == 0) {
-			int32_t t = v[0] | (v[1] << 8) | (v[2] << 16);
-			if ((t & 0x800000) != 0)
-				t |= 0xFF000000;
-			copyTo[0] = t * 0.0625f;
-			v += 3;
-			t = v[0] | (v[1] << 8) | (v[2] << 16);
-			if ((t & 0x800000) != 0)
-				t |= 0xFF000000;
-			copyTo[1] = t * 0.0625f;
-			v += 3;
-			t = v[0] | (v[1] << 8) | (v[2] << 16);
-			if ((t & 0x800000) != 0)
-				t |= 0xFF000000;
-			copyTo[2] = t * 0.0625f;
-			v += 3;
-		} else {
-			int32_t t = v[0] | (v[1] << 8);
-			if ((t & 0x8000) != 0)
-				t |= 0xFFFF0000;
-			copyTo[0] = t * 0.0625f + values[actor->joints[i].parent*6];
-			v += 2;
-			t = v[0] | (v[1] << 8);
-			if ((t & 0x8000) != 0)
-				t |= 0xFFFF0000;
-			copyTo[1] = t * 0.0625f + values[actor->joints[i].parent*6+1];
-			v += 2;
-			t = v[0] | (v[1] << 8);
-			if ((t & 0x8000) != 0)
-				t |= 0xFFFF0000;
-			copyTo[2] = t * 0.0625f + values[actor->joints[i].parent*6+2];
-			v += 2;
-		}
-
-		// decompress rotation
-		uint32_t rall = *(uint32_t*)v;
-		v += 4;
-		copyTo[3] = ((rall & 0x000007FF))       * (360.0f / 2047) - 180.0f;
-		copyTo[4] = ((rall & 0x003FF800) >> 11) * (360.0f / 2047) - 180.0f;
-		copyTo[5] = ((rall & 0xFFC00000) >> 22) * (180.0f / 1023);
-		copyTo += 6;
-	}
-
-	for (int i = 0; i < pose->numBlendShapes; ++i, v += 2)
-		pose->blendShapeActivations[i] = (*(uint16_t*)v) / 32768.0f;
 }
 
 #ifdef WIN32
@@ -1823,94 +1916,7 @@ static void* streamLoop(void* arg)
 			continue;
 		}
 
-		lockMutex(&mutex);
-		if (actorsById.count(cpp->actor) == 0) {
-			char buff[400];
-			snprintf(buff, 400, "Actor %x does not exist", cpp->actor);
-			lastErrorMessage = buff;
-			unlockMutex(&mutex);
-			continue;
-		}
-
-		int numValues;
-		float* values;
-		int at;
-		if (cpp->type == capturyPose || cpp->type == capturyCompressedPose) {
-			// log("actor %x: %d values: %g\n", cpp->actor, cpp->numValues, cpp->values[0]);
-			numValues = cpp->numValues;
-			values = cpp->values;
-			at = (int)((char*)(cpp->values) - (char*)cpp);
-		} else { // capturyPose2 || capturyCompressedPose2
-			numValues = ((CapturyPosePacket2*)cpp)->numValues;
-			values = ((CapturyPosePacket2*)cpp)->values;
-			at = (int)((char*)(((CapturyPosePacket2*)cpp)->values) - (char*)cpp);
-		}
-
-		CapturyActor* actor = actorsById[cpp->actor].get();
-		int numTransforms = std::min<int>(numValues / 6, actor->numJoints);
-		int numBlendShapes = std::min<int>(numValues - numTransforms*6, actor->numBlendShapes);
-
-		if (actorsById.count(cpp->actor) != 0 && actor->numJoints * 6 + actor->numBlendShapes != numValues) {
-			if (actor->numJoints * 6 == numValues)
-				numBlendShapes = 0;
-			else {
-				log("expected %d+%d dofs, got %d\n", actor->numJoints * 6, actor->numBlendShapes, numValues);
-				unlockMutex(&mutex);
-				continue;
-			}
-		}
-
-		std::unordered_map<int, ActorData>::iterator it = actorData.find(cpp->actor);
-		if (it == actorData.end() || (it->second.currentPose.numTransforms == 0 && it->second.currentPose.numBlendShapes == 0)) {
-			it = actorData.insert(std::make_pair(cpp->actor, ActorData())).first;
-			it->second.currentPose.actor = cpp->actor;
-			it->second.currentPose.numTransforms = numTransforms;
-			it->second.currentPose.transforms = (numTransforms != 0) ? new CapturyTransform[numTransforms] : nullptr;
-			it->second.currentPose.numBlendShapes = numBlendShapes;
-			it->second.currentPose.blendShapeActivations = (numBlendShapes != 0) ? new float[numBlendShapes] : nullptr;
-		}
-
-		if (cpp->type == capturyPose2 || cpp->type == capturyCompressedPose2) {
-			it->second.scalingProgress = ((CapturyPosePacket2*)cpp)->scalingProgress;
-			it->second.trackingQuality = ((CapturyPosePacket2*)cpp)->trackingQuality;
-			it->second.flags = ((CapturyPosePacket2*)cpp)->flags;
-		}
-
-		// select oldest in-progress item
-		int inProgressIndex = 0;
-		uint64_t oldest = 0xFFFFFFFFFFFFFFFF;
-		for (int x = 0; x < 4; ++x) {
-			if (it->second.inProgress[x].timestamp < oldest) {
-				oldest = it->second.inProgress[x].timestamp;
-				inProgressIndex = x;
-			}
-		}
-
-		// either copy to currentPose or inProgress pose
-		int numBytesToCopy = size - at;
-		bool done = false;
-		if ((cpp->type == capturyPose || cpp->type == capturyPose2) && numBytesToCopy == (int)((numTransforms*6 + numBlendShapes)*sizeof(float))) {
-			if (numTransforms != 0)
-				memcpy(it->second.currentPose.transforms, values, numTransforms*6*sizeof(float));
-			if (numBlendShapes != 0)
-				memcpy(it->second.currentPose.blendShapeActivations, values + numTransforms*6, numBlendShapes*sizeof(float));
-			done = true;
-		} else if ((cpp->type == capturyCompressedPose || cpp->type == capturyCompressedPose2) && numBytesToCopy == (numTransforms-1)*10 + 13 + numBlendShapes * 2) {
-			decompressPose(&it->second.currentPose, (uint8_t*)values, actor);
-			done = true;
-		} else {// partial
-			if (it->second.inProgress[inProgressIndex].pose == NULL)
-				it->second.inProgress[inProgressIndex].pose = new float[numValues];
-			memcpy(it->second.inProgress[inProgressIndex].pose, values, numBytesToCopy);
-			it->second.inProgress[inProgressIndex].bytesDone = numBytesToCopy;
-			it->second.inProgress[inProgressIndex].timestamp = cpp->timestamp;
-		}
-
-		if (done)
-			receivedPose(&it->second.currentPose, cpp->actor, &it->second, cpp->timestamp);
-
-		unlockMutex(&mutex);
-
+		receivedPosePacket(cpp);
 	}
 
 	isStreamThreadRunning = false;

@@ -122,6 +122,7 @@ CAPTURY_DLL_EXPORT int Captury_getCameras(const CapturyCamera** cameras);
 #define CAPTURY_STREAM_ANGLES		0x0200
 #define CAPTURY_STREAM_SCALES		0x0400
 #define CAPTURY_STREAM_BLENDSHAPES	0x0800
+#define CAPTURY_STREAM_TCP		0x1000
 
 // returns 1 if successful, 0 otherwise
 CAPTURY_DLL_EXPORT int Captury_startStreaming(int what);
