@@ -461,6 +461,7 @@ typedef enum { capturyActors = 1, capturyActor = 2,
 	       capturyDisableRemoteLogging = 77,
 	       capturyGetFramerate = 78,
 	       capturyFramerate = 79,
+	       capturyBoneTypes = 80,
 	       capturyError = 0 } CapturyPacketTypes;
 
 // returns a string for nicer error messages
@@ -939,6 +940,15 @@ struct CapturyFrameratePacket {
 
 	int		numerator;
 	int		denominator;
+};
+
+// sent to client
+struct CapturyBoneTypesPacket {
+	int32_t		type;	// capturyBoneIndices
+	int32_t		size;	// size of full message including type and size
+
+	int32_t		actorId;
+	uint8_t		boneTypes[];
 };
 
 #pragma pack(pop)

@@ -566,6 +566,8 @@ const char* Captury_getHumanReadableMessageType(CapturyPacketTypes type)
 		return "<get framerate>";
 	case capturyFramerate:
 		return "<framerate>";
+	case capturyBoneTypes:
+		return "<bone types>"
 	}
 	return "<unknown message type>";
 }
@@ -1219,6 +1221,7 @@ static bool receive(SOCKET& sok)
 						actor->joints[j].orientation[x] = cacp->joints[k].orientation[x];
 						actor->joints[j].scale[x] = 1.0f;
 					}
+					actor->joints[j].boneType = CAPTURY_UNKNOWN_BONE;
 				}
 				break; }
 			case 2: {
@@ -1232,6 +1235,7 @@ static bool receive(SOCKET& sok)
 						actor->joints[j].orientation[x] = jp->orientation[x];
 						actor->joints[j].scale[x] = 1.0f;
 					}
+					actor->joints[j].boneType = CAPTURY_UNKNOWN_BONE;
 					strncpy(actor->joints[j].name, jp->name, sizeof(actor->joints[j].name)-1);
 					at += sizeof(CapturyJointPacket2) + strlen(jp->name) + 1;
 				}
@@ -1247,6 +1251,7 @@ static bool receive(SOCKET& sok)
 						actor->joints[j].orientation[x] = jp->orientation[x];
 						actor->joints[j].scale[x] = jp->scale[x];
 					}
+					actor->joints[j].boneType = CAPTURY_UNKNOWN_BONE;
 					strncpy(actor->joints[j].name, jp->name, sizeof(actor->joints[j].name)-1);
 					at += sizeof(CapturyJointPacket3) + strlen(jp->name) + 1;
 				}
@@ -1281,6 +1286,14 @@ static bool receive(SOCKET& sok)
 				actor->blendShapes[i].name[63] = '\0';
 				at += std::min<int>(strlen(actor->blendShapes[i].name) + 1, 64);
 			}
+			unlockMutex(&mutex);
+			break; }
+		case capturyBoneTypes: {
+			CapturyBoneTypesPacket* cbt = (CapturyBoneTypesPacket*)p;
+			lockMutex(&mutex);
+			CapturyActor_p actor = actorsById[cbt->actorId];
+			for (int i = 0; i < std::min<int>(actor->numJoints, size - sizeof(CapturyBoneTypesPacket)); ++i)
+				actor->joints[i].boneType = cbt->boneTypes[i];
 			unlockMutex(&mutex);
 			break; }
 		case capturyCamera: {
