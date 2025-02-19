@@ -566,8 +566,8 @@ const char* Captury_getHumanReadableMessageType(CapturyPacketTypes type)
 		return "<get framerate>";
 	case capturyFramerate:
 		return "<framerate>";
-	case capturyBoneTypes:
-		return "<bone types>"
+	case CapturyBoneTypes:
+		return "<bone types>";
 	}
 	return "<unknown message type>";
 }
@@ -1077,7 +1077,7 @@ static bool receive(SOCKET& sok)
 				at += size;
 				toGet = std::min<int>(p->size, (int)buffer.size()) - at;
 			}
-			size = std::min<int>(p->size, buffer.size());
+			size = std::min<int>(p->size, (int)buffer.size());
 		}
 
 		// log("received packet size %d type %d (expected %d)\n", size, p->type, expect);
@@ -1284,15 +1284,15 @@ static bool receive(SOCKET& sok)
 			for (int i = 0; i < actor->numBlendShapes; ++i) {
 				strncpy(actor->blendShapes[i].name, at, 63);
 				actor->blendShapes[i].name[63] = '\0';
-				at += std::min<int>(strlen(actor->blendShapes[i].name) + 1, 64);
+				at += std::min<int>((int)strlen(actor->blendShapes[i].name) + 1, 64);
 			}
 			unlockMutex(&mutex);
 			break; }
-		case capturyBoneTypes: {
-			CapturyBoneTypesPacket* cbt = (CapturyBoneTypesPacket*)p;
+		case CapturyBoneTypes: {
+			CapturyBoneTypePacket* cbt = (CapturyBoneTypePacket*)p;
 			lockMutex(&mutex);
 			CapturyActor_p actor = actorsById[cbt->actorId];
-			for (int i = 0; i < std::min<int>(actor->numJoints, size - sizeof(CapturyBoneTypesPacket)); ++i)
+			for (int i = 0; i < std::min<int>(actor->numJoints, size - sizeof(CapturyBoneTypePacket)); ++i)
 				actor->joints[i].boneType = cbt->boneTypes[i];
 			unlockMutex(&mutex);
 			break; }
