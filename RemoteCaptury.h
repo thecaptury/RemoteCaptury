@@ -15,14 +15,18 @@ extern "C" {
 
 struct RemoteCaptury;
 
+// create the main object handle
+CAPTURY_DLL_EXPORT RemoteCaptury* Captury_create();
+// destroy the RemoteCaptury object handle
+CAPTURY_DLL_EXPORT int Captury_destroy(RemoteCaptury* rc);
 
 // returns 1 if successful, 0 otherwise
 // the default port is 2101
-CAPTURY_DLL_EXPORT RemoteCaptury* Captury_connect(const char* ip, unsigned short port);
+CAPTURY_DLL_EXPORT int Captury_connect(RemoteCaptury* rc, const char* ip, unsigned short port);
 // in case you need to set the local port because of firewalls, etc.
 // use 0 for localPort and localStreamPort if you don't care
 // if async != 0, the function will return immediately and perform the connection attempt asynchronously
-CAPTURY_DLL_EXPORT RemoteCaptury* Captury_connect2(const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort, int async);
+CAPTURY_DLL_EXPORT int Captury_connect2(RemoteCaptury* rc, const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort, int async);
 
 // returns 1 if successful, 0 otherwise
 CAPTURY_DLL_EXPORT int Captury_disconnect(RemoteCaptury* rc);

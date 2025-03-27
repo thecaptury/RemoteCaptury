@@ -304,7 +304,7 @@ struct RemoteCaptury {
 
 	volatile bool	handshakeFinished = false;
 	volatile bool	isStreamThreadRunning = false;
-	SOCKET		sock = -1;
+	SOCKET		sock = (SOCKET)-1;
 
 	volatile int	stopStreamThread = 0; // stop streaming thread
 	volatile int	stopReceiving = 0; // stop receiving thread
@@ -348,9 +348,14 @@ struct RemoteCaptury {
 	void updateSync(uint64_t localT);
 	uint64_t getRemoteTime(uint64_t localT);
 
+	#ifdef WIN32
+	DWORD receiveLoop();
+	DWORD streamLoop(CapturyStreamPacketTcp* packet);
+	#else
 	void* receiveLoop();
-	void receivedPose(CapturyPose* pose, int actorId, ActorData* aData, uint64_t timestamp);
 	void* streamLoop(CapturyStreamPacketTcp* packet);
+	#endif
+	void receivedPose(CapturyPose* pose, int actorId, ActorData* aData, uint64_t timestamp);
 	void receivedPosePacket(CapturyPosePacket* cpp);
 	SOCKET openTcpSocket();
 	bool receive(SOCKET& sok);
@@ -980,16 +985,16 @@ SOCKET RemoteCaptury::openTcpSocket()
 
 	SOCKET sok = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	if (sok == -1)
-		return -1;
+		return (SOCKET)-1;
 
 	if (localAddress.sin_port != 0 && bind(sok, (sockaddr*) &localAddress, sizeof(localAddress)) != 0) {
 		closesocket(sok);
-		return -1;
+		return (SOCKET)-1;
 	}
 
 	if (::connect(sok, (sockaddr*) &remoteAddress, sizeof(remoteAddress)) != 0) {
 		closesocket(sok);
-		return -1;
+		return (SOCKET)-1;
 	}
 
 	// set read timeout
@@ -1042,7 +1047,7 @@ bool RemoteCaptury::receive(SOCKET& sok)
 			if (isSocketErrorFatal(err)) {
 				// connection closed by peer or network down
 				closesocket(sok);
-				sok = -1;
+				sok = (SOCKET)-1;
 			}
 			log("error waiting for socket: %s\n", sockstrerror(err));
 			return false;
@@ -1062,7 +1067,7 @@ bool RemoteCaptury::receive(SOCKET& sok)
 		if (size == 0) { // the other end shut down the socket...
 			log("socket shut down by other end %s\n", sockstrerror());
 			closesocket(sok);
-			sok = -1;
+			sok = (SOCKET)-1;
 			return false;
 		}
 		if (size == -1) { // error
@@ -1070,7 +1075,7 @@ bool RemoteCaptury::receive(SOCKET& sok)
 			log("socket error %s\n", sockstrerror(err));
 			if (isSocketErrorFatal(err)) {
 				closesocket(sok);
-				sok = -1;
+				sok = (SOCKET)-1;
 			}
 			return false;
 		}
@@ -1079,7 +1084,7 @@ bool RemoteCaptury::receive(SOCKET& sok)
 			if (p->size > 10000000) {
 				log("invalid packet size: %d. closing connection.", p->size);
 				closesocket(sok);
-				sok = -1;
+				sok = (SOCKET)-1;
 				return false;
 			}
 
@@ -1094,7 +1099,7 @@ bool RemoteCaptury::receive(SOCKET& sok)
 				if (size == 0) { // the other end shut down the socket...
 					log("socket shut down by other end: %s\n", sockstrerror());
 					closesocket(sok);
-					sok = -1;
+					sok = (SOCKET)-1;
 					return false;
 				}
 				if (size == -1) { // error
@@ -1102,7 +1107,7 @@ bool RemoteCaptury::receive(SOCKET& sok)
 					log("socket error: %s\n", sockstrerror(err));
 					if (isSocketErrorFatal(err)) {
 						closesocket(sok);
-						sok = -1;
+						sok = (SOCKET)-1;
 					}
 					return false;
 				}
@@ -1531,7 +1536,11 @@ static void* receiveLoop(void* arg)
 	return ((RemoteCaptury*)arg)->receiveLoop();
 }
 
+#ifdef WIN32
+DWORD RemoteCaptury::receiveLoop()
+#else
 void* RemoteCaptury::receiveLoop()
+#endif
 {
 	bool handshaking = !handshakeFinished;
 	log("starting receive loop\n");
@@ -1592,7 +1601,11 @@ static void* streamLoop(void* arg)
 	return rc[0]->streamLoop(packet);
 }
 
+#ifdef WIN32
+DWORD RemoteCaptury::streamLoop(CapturyStreamPacketTcp* packet)
+#else
 void* RemoteCaptury::streamLoop(CapturyStreamPacketTcp* packet)
+#endif
 {
 	isStreamThreadRunning = true;
 
@@ -1983,23 +1996,27 @@ void* RemoteCaptury::streamLoop(CapturyStreamPacketTcp* packet)
 	return 0;
 }
 
-extern "C" RemoteCaptury* Captury_connect(const char* ip, unsigned short port)
+extern "C" RemoteCaptury* Captury_create()
 {
-	RemoteCaptury* rc = new RemoteCaptury;
-	if (rc->connect(ip, port, 0, 0, 0))
-		return rc;
+	return new RemoteCaptury;
+}
+
+extern "C" int Captury_destroy(RemoteCaptury* rc)
+{
+	int ret = Captury_disconnect(rc);
 	delete rc;
-	return nullptr;
+	return ret;
+}
+
+extern "C" int Captury_connect(RemoteCaptury* rc, const char* ip, unsigned short port)
+{
+	return rc->connect(ip, port, 0, 0, 0);
 }
 
 // returns 1 if successful, 0 otherwise
-extern "C" RemoteCaptury* Captury_connect2(const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort, int async)
+extern "C" int Captury_connect2(RemoteCaptury* rc, const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort, int async)
 {
-	RemoteCaptury* rc = new RemoteCaptury;
-	if (rc->connect(ip, port, localPort, localStreamPort, async))
-		return rc;
-	delete rc;
-	return nullptr;
+	return rc->connect(ip, port, localPort, localStreamPort, async);
 }
 
 bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort, int async)
