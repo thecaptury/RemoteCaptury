@@ -71,14 +71,6 @@ typedef uint32_t uint;
 
 #ifdef WIN32
 
-static HANDLE		streamThread;
-static HANDLE		receiveThread;
-static HANDLE		syncThread;
-static CRITICAL_SECTION	mutex;
-static CRITICAL_SECTION	partialActorMutex;
-static CRITICAL_SECTION syncMutex;
-static CRITICAL_SECTION logMutex;
-static bool mutexesInited = false;
 #define socklen_t int
 #define sleepMicroSeconds(us) Sleep(us / 1000)
 
@@ -98,19 +90,13 @@ static bool wsaInited = false;
 
 #define SOCKET		int
 #define closesocket	close
-static pthread_t	streamThread;
-static pthread_t	receiveThread;
-static pthread_t	syncThread;
 struct CAPABILITY("mutex") MutexStruct {
 	pthread_mutex_t	m;
 	MutexStruct()			{ pthread_mutex_init(&m, nullptr); }
 	void lock() ACQUIRE()		{ pthread_mutex_lock(&m); }
 	void unlock() RELEASE()		{ pthread_mutex_unlock(&m); }
 };
-static MutexStruct mutex;
-static MutexStruct partialActorMutex;
-static MutexStruct syncMutex;
-static MutexStruct logMutex;
+
 // static pthread_mutex_t	mutex = PTHREAD_MUTEX_INITIALIZER;
 #define sleepMicroSeconds(us) usleep(us)
 
@@ -128,42 +114,7 @@ static inline int setSocketTimeout(SOCKET sock, int timeout_ms)
 
 #endif
 
-static bool syncLoopIsRunning = false;
-
-static int streamWhat = CAPTURY_STREAM_NOTHING;
-static int32_t streamCamera;
-static std::vector<uint16_t> streamAngles;
-
-static std::string currentDay;
-static std::string currentSession;
-static std::string currentShot;
-
 typedef std::shared_ptr<CapturyActor> CapturyActor_p;
-
-// actor id -> pointer to actor
-static std::unordered_map<int, CapturyActor_p> actorsById GUARDED_BY(mutex);
-static std::unordered_map<const CapturyActor*, CapturyActor_p> returnedActors GUARDED_BY(mutex);
-static std::unordered_map<int, CapturyActor_p> partialActors GUARDED_BY(partialActorMutex); // actors that have been received in part
-static std::vector<CapturyActor> actorPointers GUARDED_BY(mutex); // used by Captury_getActors()
-static std::vector<CapturyActor_p> actorSharedPointers GUARDED_BY(mutex); // used by Captury_getActors()
-
-static std::unordered_map<int, std::vector<CapturyAngleData>> currentAngles;
-
-static int numCameras = -1;
-static std::vector<CapturyCamera> cameras;
-
-static CapturyLatencyPacket currentLatency;
-static uint64_t receivedPoseTime; // time pose packet was received
-static uint64_t receivedPoseTimestamp; // timestamp of pose that corresponds to the receivedPoseTime
-static uint64_t dataAvailableTime;
-static uint64_t dataReceivedTime;
-static uint64_t mostRecentPoseReceivedTime; // time pose was received
-static uint64_t mostRecentPoseReceivedTimestamp; // timestamp of that pose
-
-static int framerateNumerator = -1;
-static int framerateDenominator = -1;
-
-const char* CapturyActorStatusString[] = {"scaling", "tracking", "stopped", "deleted", "unknown"};
 
 struct ActorData {
 	// actor id -> scaling progress (0 to 100)
@@ -205,17 +156,7 @@ struct ActorData {
 	}
 };
 
-static std::unordered_map<int, ActorData> actorData GUARDED_BY(mutex);
-
-static std::map<int32_t, CapturyImage> currentImages;
-static std::map<int32_t, std::vector<int>> currentImagesReceivedPackets;
-static std::map<int32_t, CapturyImage> currentImagesDone;
-
-// custom type name -> callback
-static std::map<std::string, CapturyCustomPacketCallback> callbacks;
-
-static uint64_t arTagsTime;
-static std::vector<CapturyARTag> arTags;
+const char* CapturyActorStatusString[] = {"scaling", "tracking", "stopped", "deleted", "unknown"};
 
 // helper structs
 struct ActorAndJoint {
@@ -238,54 +179,6 @@ struct MarkerTransform {
 	CapturyTransform	trafo;
 	uint64_t		timestamp;
 };
-// actor id + joint index -> marker transformation + timestamp
-static std::map<ActorAndJoint, MarkerTransform> markerTransforms;
-
-// error message
-static std::string lastErrorMessage;
-static std::string lastStatusMessage = "disconnected";
-
-static bool getLocalPoses = false;
-
-static CapturyNewPoseCallback newPoseCallback = NULL;
-static void* newPoseArg = NULL;
-static CapturyNewAnglesCallback newAnglesCallback = NULL;
-static void* newAnglesArg = NULL;
-static CapturyActorChangedCallback actorChangedCallback = NULL;
-static void* actorChangedArg = NULL;
-static CapturyARTagCallback arTagCallback = NULL;
-static void* arTagArg = NULL;
-static CapturyImageCallback imageCallback = NULL;
-static void* imageArg = NULL;
-
-static volatile bool	handshakeFinished = false;
-static volatile bool	isStreamThreadRunning = false;
-static SOCKET		sock = -1;
-
-static volatile int	stopStreamThread = 0; // stop streaming thread
-static volatile int	stopReceiving = 0; // stop receiving thread
-
-static sockaddr_in	localAddress; // local address
-static sockaddr_in	localStreamAddress; // local address for streaming socket
-static sockaddr_in	remoteAddress; // address of server
-static uint16_t		streamSocketPort = 0;
-
-static uint64_t		pingTime;
-static int32_t		nextTimeId = 213;
-
-static int					backgroundQuality = -1;
-static CapturyBackgroundFinishedCallback	backgroundFinishedCallback = NULL;
-static void*					backgroundFinishedCallbackUserData = NULL;
-
-static int64_t				startRecordingTime = 0;
-
-static bool				doPrintf = true;
-static bool				doRemoteLogging = false;
-static std::list<std::string>		logs;
-
-#ifndef WIN32
-static void log(const char *format, ...) __attribute__((format(printf,1,2)));
-#endif
 
 struct Sync {
 	double offset;
@@ -303,8 +196,6 @@ struct SyncSample {
 
 	SyncSample(uint64_t l, uint64_t r, uint32_t pp) : localT(l), remoteT(r), pingPongT(pp) {}
 };
-
-std::vector<SyncSample> syncSamples;
 
 #ifdef WIN32
 static inline void lockMutex(CRITICAL_SECTION* critsec)
@@ -328,7 +219,152 @@ static inline void unlockMutex(MutexStruct* mtx) RELEASE(mtx)
 // #define lockMutex(mtx)		printf("  locked %p at %d\n", mtx, __LINE__); (mtx)->lock()
 #endif
 
-static void actualLog(int logLevel, const char* format, va_list args)
+
+struct RemoteCaptury {
+	#ifdef WIN32
+	HANDLE			streamThread;
+	HANDLE			receiveThread;
+	HANDLE			syncThread;
+	CRITICAL_SECTION	mutex;
+	CRITICAL_SECTION	partialActorMutex;
+	CRITICAL_SECTION	syncMutex;
+	CRITICAL_SECTION	logMutex;
+	bool mutexesInited = false;
+	#else
+	pthread_t	streamThread;
+	pthread_t	receiveThread;
+	pthread_t	syncThread;
+	MutexStruct	mutex;
+	MutexStruct	partialActorMutex;
+	MutexStruct	syncMutex;
+	MutexStruct	logMutex;
+	#endif
+
+	bool syncLoopIsRunning = false;
+
+	int streamWhat = CAPTURY_STREAM_NOTHING;
+	int32_t streamCamera;
+	std::vector<uint16_t> streamAngles;
+
+	std::string currentDay;
+	std::string currentSession;
+	std::string currentShot;
+
+	// actor id -> pointer to actor
+	std::unordered_map<int, CapturyActor_p> actorsById GUARDED_BY(mutex);
+	std::unordered_map<const CapturyActor*, CapturyActor_p> returnedActors GUARDED_BY(mutex);
+	std::unordered_map<int, CapturyActor_p> partialActors GUARDED_BY(partialActorMutex); // actors that have been received in part
+	std::vector<CapturyActor> actorPointers GUARDED_BY(mutex); // used by Captury_getActors()
+	std::vector<CapturyActor_p> actorSharedPointers GUARDED_BY(mutex); // used by Captury_getActors()
+
+	std::unordered_map<int, std::vector<CapturyAngleData>> currentAngles;
+
+	int numCameras = -1;
+	std::vector<CapturyCamera> cameras;
+
+	CapturyLatencyPacket currentLatency;
+	uint64_t receivedPoseTime; // time pose packet was received
+	uint64_t receivedPoseTimestamp; // timestamp of pose that corresponds to the receivedPoseTime
+	uint64_t dataAvailableTime;
+	uint64_t dataReceivedTime;
+	uint64_t mostRecentPoseReceivedTime; // time pose was received
+	uint64_t mostRecentPoseReceivedTimestamp; // timestamp of that pose
+
+	int framerateNumerator = -1;
+	int framerateDenominator = -1;
+
+	std::unordered_map<int, ActorData> actorData GUARDED_BY(mutex);
+
+	std::map<int32_t, CapturyImage> currentImages;
+	std::map<int32_t, std::vector<int>> currentImagesReceivedPackets;
+	std::map<int32_t, CapturyImage> currentImagesDone;
+
+	uint64_t arTagsTime;
+	std::vector<CapturyARTag> arTags;
+
+	// actor id + joint index -> marker transformation + timestamp
+	std::map<ActorAndJoint, MarkerTransform> markerTransforms;
+
+	// error message
+	std::string lastErrorMessage;
+	std::string lastStatusMessage = "disconnected";
+
+	bool getLocalPoses = false;
+
+	CapturyNewPoseCallback newPoseCallback = NULL;
+	void* newPoseArg = NULL;
+	CapturyNewAnglesCallback newAnglesCallback = NULL;
+	void* newAnglesArg = NULL;
+	CapturyActorChangedCallback actorChangedCallback = NULL;
+	void* actorChangedArg = NULL;
+	CapturyARTagCallback arTagCallback = NULL;
+	void* arTagArg = NULL;
+	CapturyImageCallback imageCallback = NULL;
+	void* imageArg = NULL;
+
+	volatile bool	handshakeFinished = false;
+	volatile bool	isStreamThreadRunning = false;
+	SOCKET		sock = -1;
+
+	volatile int	stopStreamThread = 0; // stop streaming thread
+	volatile int	stopReceiving = 0; // stop receiving thread
+
+	sockaddr_in	localAddress; // local address
+	sockaddr_in	localStreamAddress; // local address for streaming socket
+	sockaddr_in	remoteAddress; // address of server
+	uint16_t		streamSocketPort = 0;
+
+	uint64_t		pingTime;
+	int32_t		nextTimeId = 213;
+
+	int					backgroundQuality = -1;
+	CapturyBackgroundFinishedCallback	backgroundFinishedCallback = NULL;
+	void*					backgroundFinishedCallbackUserData = NULL;
+
+	int64_t				startRecordingTime = 0;
+
+	bool				doPrintf = true;
+	bool				doRemoteLogging = false;
+	std::list<std::string>		logs;
+
+	std::vector<SyncSample> syncSamples;
+
+
+	Sync oldSync GUARDED_BY(syncMutex) = Sync(0.0, 1.0);
+	Sync currentSync GUARDED_BY(syncMutex) = Sync(0.0, 1.0);
+	uint64_t transitionStartLocalT GUARDED_BY(syncMutex) = 0;
+	uint64_t transitionEndLocalT GUARDED_BY(syncMutex) = 0;
+
+	bool sendPacket(CapturyRequestPacket* packet, CapturyPacketTypes expectedReplyType);
+
+	void actualLog(int logLevel, const char* format, va_list args);
+	#ifdef WIN32
+	void log(const char* format, ...);
+	#else
+	void log(const char *format, ...) __attribute__((format(printf,2,3)));
+	#endif
+
+	void computeSync(Sync& s);
+	void updateSync(uint64_t localT);
+	uint64_t getRemoteTime(uint64_t localT);
+
+	void* receiveLoop();
+	void receivedPose(CapturyPose* pose, int actorId, ActorData* aData, uint64_t timestamp);
+	void* streamLoop(CapturyStreamPacketTcp* packet);
+	void receivedPosePacket(CapturyPosePacket* cpp);
+	SOCKET openTcpSocket();
+	bool receive(SOCKET& sok);
+	void deleteActors();
+
+	bool connect(const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort, int async);
+	bool disconnect();
+
+	int startStreamingImagesAndAngles(int what, int32_t camId, int numAngles, uint16_t* angles);
+	CapturyPose* getCurrentPoseAndTrackingConsistencyForActor(int actorId, int* tc);
+};
+
+
+void RemoteCaptury::actualLog(int logLevel, const char* format, va_list args)
 {
 	#ifdef WIN32
 	if (!mutexesInited) {
@@ -362,7 +398,7 @@ static void actualLog(int logLevel, const char* format, va_list args)
 	}
 }
 
-static void log(const char* format, ...)
+void RemoteCaptury::log(const char* format, ...)
 {
 	va_list args;
 	va_start(args, format);
@@ -370,35 +406,35 @@ static void log(const char* format, ...)
 	va_end(args);
 }
 
-void Captury_log(int logLevel, const char* format, ...)
+void Captury_log(RemoteCaptury* rc, int logLevel, const char* format, ...)
 {
 	va_list args;
 	va_start(args, format);
-	actualLog(logLevel, format, args);
+	rc->actualLog(logLevel, format, args);
 	va_end(args);
 }
 
-void Captury_enablePrintf(int on)
+void Captury_enablePrintf(RemoteCaptury* rc, int on)
 {
-	doPrintf = (on != 0);
+	rc->doPrintf = (on != 0);
 }
 
-void Captury_enableRemoteLogging(int on)
+void Captury_enableRemoteLogging(RemoteCaptury* rc, int on)
 {
-	doRemoteLogging = (on != 0);
+	rc->doRemoteLogging = (on != 0);
 }
 
-const char* Captury_getNextLogMessage()
+const char* Captury_getNextLogMessage(RemoteCaptury* rc)
 {
-	lockMutex(&logMutex);
-	if (logs.empty()) {
-		unlockMutex(&logMutex);
+	lockMutex(&rc->logMutex);
+	if (rc->logs.empty()) {
+		unlockMutex(&rc->logMutex);
 		return nullptr;
 	}
 
-	const char* str = strdup(logs.front().c_str());
-	logs.pop_front();
-	unlockMutex(&logMutex);
+	const char* str = strdup(rc->logs.front().c_str());
+	rc->logs.pop_front();
+	unlockMutex(&rc->logMutex);
 
 	return str;
 }
@@ -653,7 +689,7 @@ static uint64_t getTime()
 // if there are only a few samples we cannot estimate the slope f accurately. so we
 // just estimate an offset (the median of the time differences between remote and local)
 //
-void computeSync(Sync& s)
+void RemoteCaptury::computeSync(Sync& s)
 {
 	double meanLocalT = 0;
 	double medianOffset = 0.0;
@@ -693,11 +729,7 @@ void computeSync(Sync& s)
 	}
 }
 
-static Sync oldSync GUARDED_BY(syncMutex) = Sync(0.0, 1.0);
-static Sync currentSync GUARDED_BY(syncMutex) = Sync(0.0, 1.0);
-static uint64_t transitionStartLocalT GUARDED_BY(syncMutex) = 0;
-static uint64_t transitionEndLocalT GUARDED_BY(syncMutex) = 0;
-static void updateSync(uint64_t localT)
+void RemoteCaptury::updateSync(uint64_t localT)
 {
 	constexpr uint64_t defaultTransitionTime = 100000; // 0.1 second
 	Sync tempSync(0.0, 1.0);
@@ -721,7 +753,7 @@ static void updateSync(uint64_t localT)
 	log("sync: old - new estimate %g (factor %g)\n", delta, factor);
 }
 
-static uint64_t getRemoteTime(uint64_t localT)
+uint64_t RemoteCaptury::getRemoteTime(uint64_t localT)
 {
 	lockMutex(&syncMutex);
 	if (localT >= transitionEndLocalT) {
@@ -738,18 +770,18 @@ static uint64_t getRemoteTime(uint64_t localT)
 	return (uint64_t)(oldEstimate * (1.0 - at) + newEstimate * at);
 }
 
-extern "C" uint64_t Captury_getTime()
+extern "C" uint64_t Captury_getTime(RemoteCaptury* rc)
 {
-	return getRemoteTime(getTime());
+	return rc->getRemoteTime(getTime());
 }
 
-static void receivedPose(CapturyPose* pose, int actorId, ActorData* aData, uint64_t timestamp) REQUIRES(mutex)
+void RemoteCaptury::receivedPose(CapturyPose* pose, int actorId, ActorData* aData, uint64_t timestamp) REQUIRES(mutex)
 {
 	if (aData->status == ACTOR_DELETED)
 		return;
 
 	if (getLocalPoses)
-		Captury_convertPoseToLocal(pose, actorId);
+		Captury_convertPoseToLocal(this, pose, actorId);
 
 	pose->timestamp = timestamp;
 
@@ -764,7 +796,7 @@ static void receivedPose(CapturyPose* pose, int actorId, ActorData* aData, uint6
 		aData->status = ACTOR_TRACKING;
 		if (actorChangedCallback) {
 			unlockMutex(&mutex);
-			actorChangedCallback(actorId, ACTOR_TRACKING, actorChangedArg);
+			actorChangedCallback(this, actorId, ACTOR_TRACKING, actorChangedArg);
 			lockMutex(&mutex);
 		}
 	}
@@ -774,7 +806,7 @@ static void receivedPose(CapturyPose* pose, int actorId, ActorData* aData, uint6
 		CapturyActor* actor = a.get();
 		returnedActors[actor] = a;
 		unlockMutex(&mutex);
-		newPoseCallback(actor, pose, aData->trackingQuality, newPoseArg);
+		newPoseCallback(this, actor, pose, aData->trackingQuality, newPoseArg);
 		lockMutex(&mutex);
 	}
 
@@ -794,7 +826,7 @@ static void receivedPose(CapturyPose* pose, int actorId, ActorData* aData, uint6
 
 	unlockMutex(&mutex);
 	for (int id : stoppedActorIds)
-		actorChangedCallback(id, ACTOR_STOPPED, actorChangedArg);
+		actorChangedCallback(this, id, ACTOR_STOPPED, actorChangedArg);
 	lockMutex(&mutex);
 }
 
@@ -851,7 +883,7 @@ static void decompressPose(CapturyPose* pose, uint8_t* v, CapturyActor* actor)
 		pose->blendShapeActivations[i] = (*(uint16_t*)v) / 32768.0f;
 }
 
-static void receivedPosePacket(CapturyPosePacket* cpp)
+void RemoteCaptury::receivedPosePacket(CapturyPosePacket* cpp)
 {
 	lockMutex(&mutex);
 	if (actorsById.count(cpp->actor) == 0) {
@@ -942,7 +974,7 @@ static void receivedPosePacket(CapturyPosePacket* cpp)
 	unlockMutex(&mutex);
 }
 
-static SOCKET openTcpSocket()
+SOCKET RemoteCaptury::openTcpSocket()
 {
 	log("opening TCP socket\n");
 
@@ -955,7 +987,7 @@ static SOCKET openTcpSocket()
 		return -1;
 	}
 
-	if (connect(sok, (sockaddr*) &remoteAddress, sizeof(remoteAddress)) != 0) {
+	if (::connect(sok, (sockaddr*) &remoteAddress, sizeof(remoteAddress)) != 0) {
 		closesocket(sok);
 		return -1;
 	}
@@ -991,7 +1023,7 @@ static bool isSocketErrorTryAgain(int err)
 
 // waits for at most 500ms before it fails
 // returns false if the expected packet is not received
-static bool receive(SOCKET& sok)
+bool RemoteCaptury::receive(SOCKET& sok)
 {
 	static std::vector<char> buffer(9000);
 	CapturyRequestPacket* p = (CapturyRequestPacket*)buffer.data();
@@ -1188,7 +1220,7 @@ static bool receive(SOCKET& sok)
 				actorsById[actor->id] = actor;
 				unlockMutex(&mutex);
 				if (actorChangedCallback)
-					actorChangedCallback(actor->id, actorData[actor->id].status, actorChangedArg);
+					actorChangedCallback(this, actor->id, actorData[actor->id].status, actorChangedArg);
 			} else {
 				lockMutex(&partialActorMutex);
 				partialActors[actor->id] = actor;
@@ -1263,7 +1295,7 @@ static bool receive(SOCKET& sok)
 				actorsById[actor->id] = actor;
 				unlockMutex(&mutex);
 				if (actorChangedCallback)
-					actorChangedCallback(actor->id, actorData[actor->id].status, actorChangedArg);
+					actorChangedCallback(this, actor->id, actorData[actor->id].status, actorChangedArg);
 				lockMutex(&partialActorMutex);
 				partialActors.erase(actor->id);
 				unlockMutex(&partialActorMutex);
@@ -1356,14 +1388,6 @@ static bool receive(SOCKET& sok)
 			framerateNumerator = fp->numerator;
 			framerateDenominator = fp->denominator;
 			break; }
-		case capturyCustom: {
-			CapturyCustomPacket* ccp = (CapturyCustomPacket*)p;
-			ccp->name[15] = 0;
-			std::map<std::string, CapturyCustomPacketCallback>::iterator it = callbacks.find(ccp->name);
-			if (it == callbacks.end()) // no callback for this string
-				break;
-			it->second(ccp->size - sizeof(CapturyCustomPacketCallback), ccp->data);
-			break; }
 		case capturyEnableRemoteLogging:
 			doRemoteLogging = true;
 			break;
@@ -1437,7 +1461,7 @@ static bool receive(SOCKET& sok)
 		case capturyActorModeChanged: {
 			CapturyActorModeChangedPacket* amc = (CapturyActorModeChangedPacket*)p;
 			if (actorChangedCallback != NULL)
-				actorChangedCallback(amc->actor, amc->mode, actorChangedArg);
+				actorChangedCallback(this, amc->actor, amc->mode, actorChangedArg);
 			lockMutex(&mutex);
 			if (actorData.count(amc->actor))
 				actorData[amc->actor].status = (CapturyActorStatus)amc->mode;
@@ -1465,7 +1489,7 @@ static bool receive(SOCKET& sok)
 	return true;
 }
 
-static void deleteActors()
+void RemoteCaptury::deleteActors()
 {
 	log("deleting all actors\n");
 	lockMutex(&mutex);
@@ -1495,14 +1519,19 @@ static void deleteActors()
 	unlockMutex(&mutex);
 
 	for (int id : deletedActorIds)
-		actorChangedCallback(id, ACTOR_DELETED, actorChangedArg);
+		actorChangedCallback(this, id, ACTOR_DELETED, actorChangedArg);
 }
 
 #ifdef WIN32
-static DWORD WINAPI receiveLoop(void* /*arg*/)
+static DWORD WINAPI receiveLoop(void* arg)
 #else
 static void* receiveLoop(void* arg)
 #endif
+{
+	return ((RemoteCaptury*)arg)->receiveLoop();
+}
+
+void* RemoteCaptury::receiveLoop()
 {
 	bool handshaking = !handshakeFinished;
 	log("starting receive loop\n");
@@ -1533,7 +1562,7 @@ static void* receiveLoop(void* arg)
 				}
 
 				if (streamWhat != CAPTURY_STREAM_NOTHING)
-					Captury_startStreamingImagesAndAngles(streamWhat, streamCamera, (int)streamAngles.size(), streamAngles.data());
+					Captury_startStreamingImagesAndAngles(this, streamWhat, streamCamera, (int)streamAngles.size(), streamAngles.data());
 
 				handshaking = false; // this is a lie but makes it go into the normal loop
 			}
@@ -1544,7 +1573,7 @@ static void* receiveLoop(void* arg)
 	return 0;
 }
 
-static bool sendPacket(CapturyRequestPacket* packet, CapturyPacketTypes expectedReplyType)
+bool RemoteCaptury::sendPacket(CapturyRequestPacket* packet, CapturyPacketTypes expectedReplyType)
 {
 	if (send(sock, (const char*)packet, packet->size, 0) != packet->size)
 		return false;
@@ -1558,9 +1587,15 @@ static DWORD WINAPI streamLoop(void* arg)
 static void* streamLoop(void* arg)
 #endif
 {
+	RemoteCaptury** rc = (RemoteCaptury**)arg;
+	CapturyStreamPacketTcp* packet = (CapturyStreamPacketTcp*)&rc[1];
+	return rc[0]->streamLoop(packet);
+}
+
+void* RemoteCaptury::streamLoop(CapturyStreamPacketTcp* packet)
+{
 	isStreamThreadRunning = true;
 
-	CapturyStreamPacketTcp* packet = (CapturyStreamPacketTcp*)arg;
 
 	SOCKET streamSock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 	if (streamSock == -1) {
@@ -1576,7 +1611,7 @@ static void* streamLoop(void* arg)
 		return 0;
 	}
 
-	if (connect(streamSock, (sockaddr*) &remoteAddress, sizeof(remoteAddress)) != 0) {
+	if (::connect(streamSock, (sockaddr*) &remoteAddress, sizeof(remoteAddress)) != 0) {
 		closesocket(streamSock);
 		log("failed to connect stream socket\n");
 		free(packet);
@@ -1597,16 +1632,17 @@ static void* streamLoop(void* arg)
 	setSocketTimeout(streamSock, 100);
 
 	struct sockaddr_in thisEnd;
+
 	{
 		socklen_t len = sizeof(thisEnd);
 		getsockname(streamSock, (sockaddr*) &thisEnd, &len);
 		streamSocketPort = thisEnd.sin_port;
 
 		#ifdef WIN32
-		 	log("Stream receiving on %d.%d.%d.%d:%d\n", thisEnd.sin_addr.S_un.S_un_b.s_b1, thisEnd.sin_addr.S_un.S_un_b.s_b2, thisEnd.sin_addr.S_un.S_un_b.s_b3, thisEnd.sin_addr.S_un.S_un_b.s_b4, ntohs(thisEnd.sin_port));
+		log("Stream receiving on %d.%d.%d.%d:%d\n", thisEnd.sin_addr.S_un.S_un_b.s_b1, thisEnd.sin_addr.S_un.S_un_b.s_b2, thisEnd.sin_addr.S_un.S_un_b.s_b3, thisEnd.sin_addr.S_un.S_un_b.s_b4, ntohs(thisEnd.sin_port));
 		#else
-			char buf[100];
-			log("stream receiving on %s:%d\n", inet_ntop(AF_INET, &thisEnd.sin_addr, buf, 100), ntohs(thisEnd.sin_port));
+		char buf[100];
+		log("stream receiving on %s:%d\n", inet_ntop(AF_INET, &thisEnd.sin_addr, buf, 100), ntohs(thisEnd.sin_port));
 		#endif
 	}
 
@@ -1681,7 +1717,7 @@ static void* streamLoop(void* arg)
 			break;
 		}
 
-		dataReceivedTime = Captury_getTime(); // get remote time
+		dataReceivedTime = Captury_getTime(this); // get remote time
 
 		if (cpp->type == capturyImageData) {
 			// received data for the image
@@ -1813,7 +1849,7 @@ static void* streamLoop(void* arg)
 			unlockMutex(&mutex);
 
 			if (finished && imageCallback)
-				imageCallback(&currentImagesDone[cip->actor], imageArg);
+				imageCallback(this, &currentImagesDone[cip->actor], imageArg);
 
 			continue;
 		}
@@ -1829,14 +1865,14 @@ static void* streamLoop(void* arg)
 			//	log("  id %d: orient % 4.1f,% 4.1f,% 4.1f\n", art->tags[i].id, art->tags[i].transform.rotation[0], art->tags[i].transform.rotation[1], art->tags[i].transform.rotation[2]);
 			unlockMutex(&mutex);
 			if (arTagCallback != NULL)
-				arTagCallback(art->numTags, &art->tags[0], arTagArg);
+				arTagCallback(this, art->numTags, &art->tags[0], arTagArg);
 			continue;
 		}
 
 		if (cpp->type == capturyAngles) {
 			CapturyAnglesPacket* ang = (CapturyAnglesPacket*)buffer.data();
 			if (newAnglesCallback != NULL)
-				newAnglesCallback(Captury_getActor(ang->actor), ang->numAngles, ang->angles, newAnglesArg);
+				newAnglesCallback(this, Captury_getActor(this, ang->actor), ang->numAngles, ang->angles, newAnglesArg);
 			lockMutex(&mutex);
 			currentAngles[ang->actor].resize(ang->numAngles);
 			for (int i = 0; i < ang->numAngles; ++i)
@@ -1849,7 +1885,7 @@ static void* streamLoop(void* arg)
 			CapturyActorModeChangedPacket* amc = (CapturyActorModeChangedPacket*)buffer.data();
 			log("received actorModeChanged packet %x %d\n", amc->actor, amc->mode);
 			if (actorChangedCallback != NULL)
-				actorChangedCallback(amc->actor, amc->mode, actorChangedArg);
+				actorChangedCallback(this, amc->actor, amc->mode, actorChangedArg);
 			lockMutex(&mutex);
 			if (actorData.count(amc->actor))
 				actorData[amc->actor].status = (CapturyActorStatus)amc->mode;
@@ -1947,13 +1983,26 @@ static void* streamLoop(void* arg)
 	return 0;
 }
 
-extern "C" int Captury_connect(const char* ip, unsigned short port)
+extern "C" RemoteCaptury* Captury_connect(const char* ip, unsigned short port)
 {
-	return Captury_connect2(ip, port, 0, 0, 0);
+	RemoteCaptury* rc = new RemoteCaptury;
+	if (rc->connect(ip, port, 0, 0, 0))
+		return rc;
+	delete rc;
+	return nullptr;
 }
 
 // returns 1 if successful, 0 otherwise
-extern "C" int Captury_connect2(const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort, int async)
+extern "C" RemoteCaptury* Captury_connect2(const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort, int async)
+{
+	RemoteCaptury* rc = new RemoteCaptury;
+	if (rc->connect(ip, port, localPort, localStreamPort, async))
+		return rc;
+	delete rc;
+	return nullptr;
+}
+
+bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort, int async)
 {
 #ifdef WIN32
 	if (!mutexesInited) {
@@ -1974,7 +2023,7 @@ extern "C" int Captury_connect2(const char* ip, unsigned short port, unsigned sh
 #endif
 
 	if (sock != -1)
-		Captury_disconnect();
+		disconnect();
 
 	localAddress.sin_family = AF_INET;
 	localAddress.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -2005,20 +2054,28 @@ extern "C" int Captury_connect2(const char* ip, unsigned short port, unsigned sh
 				return 0;
 		}
 
-		receiveLoop(nullptr); // block until handshake is finished
+		receiveLoop(); // block until handshake is finished
 	}
 
 #ifdef WIN32
-	receiveThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)receiveLoop, nullptr, 0, NULL);
+	receiveThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)::receiveLoop, this, 0, NULL);
 #else
-	pthread_create(&receiveThread, NULL, receiveLoop, nullptr);
+	pthread_create(&receiveThread, NULL, ::receiveLoop, this);
 #endif
 
 	return 1;
 }
 
 // returns 1 if successful, 0 otherwise
-extern "C" int Captury_disconnect()
+extern "C" int Captury_disconnect(RemoteCaptury* rc)
+{
+	rc->disconnect();
+	delete rc;
+
+	return 1;
+}
+
+bool RemoteCaptury::disconnect()
 {
 	bool closedOrStopped = false;
 
@@ -2058,102 +2115,102 @@ extern "C" int Captury_disconnect()
 }
 
 // returns 1 if successful, 0 otherwise
-extern "C" int Captury_getConnectionStatus()
+extern "C" int Captury_getConnectionStatus(RemoteCaptury* rc)
 {
-	if (sock == -1)
+	if (rc->sock == -1)
 		return CAPTURY_DISCONNECTED;
-	return (handshakeFinished && stopReceiving == 0) ? CAPTURY_CONNECTED : CAPTURY_CONNECTING;
+	return (rc->handshakeFinished && rc->stopReceiving == 0) ? CAPTURY_CONNECTED : CAPTURY_CONNECTING;
 }
 
 // returns the current number of actors
 // the array is owned by the library - do not free
-extern "C" int Captury_getActors(const CapturyActor** actrs)
+extern "C" int Captury_getActors(RemoteCaptury* rc, const CapturyActor** actrs)
 {
-	lockMutex(&mutex);
+	lockMutex(&rc->mutex);
 
-	actorPointers.clear();
-	actorPointers.reserve(actorsById.size());
-	actorSharedPointers.clear();
-	actorSharedPointers.reserve(actorsById.size());
+	rc->actorPointers.clear();
+	rc->actorPointers.reserve(rc->actorsById.size());
+	rc->actorSharedPointers.clear();
+	rc->actorSharedPointers.reserve(rc->actorsById.size());
 
 	int numActors = 0;
-	for (auto& it : actorsById) {
-		if (actorData[it.first].status != ACTOR_DELETED) {
-			actorPointers.push_back(*it.second.get());
-			actorSharedPointers.push_back(it.second);
+	for (auto& it : rc->actorsById) {
+		if (rc->actorData[it.first].status != ACTOR_DELETED) {
+			rc->actorPointers.push_back(*it.second.get());
+			rc->actorSharedPointers.push_back(it.second);
 			++numActors;
 		}
 	}
 
-	*actrs = (numActors == 0) ? NULL : const_cast<const CapturyActor*>(actorPointers.data());
-	unlockMutex(&mutex);
+	*actrs = (numActors == 0) ? NULL : const_cast<const CapturyActor*>(rc->actorPointers.data());
+	unlockMutex(&rc->mutex);
 
 	return numActors;
 }
 
-extern "C" void Captury_freeActors()
+extern "C" void Captury_freeActors(RemoteCaptury* rc)
 {
-	lockMutex(&mutex);
+	lockMutex(&rc->mutex);
 
-	actorPointers.clear();
-	actorSharedPointers.clear();
+	rc->actorPointers.clear();
+	rc->actorSharedPointers.clear();
 
-	unlockMutex(&mutex);
+	unlockMutex(&rc->mutex);
 }
 
 // returns the actor if found or NULL if not
-extern "C" const CapturyActor* Captury_getActor(int id)
+extern "C" const CapturyActor* Captury_getActor(RemoteCaptury* rc, int id)
 {
-	if (sock == -1)
+	if (rc->sock == -1)
 		return NULL;
 
 	if (id == 0) // invalid id
 		return NULL;
 
-	lockMutex(&mutex);
-	if (actorsById.count(id) == 0) {
-		unlockMutex(&mutex);
+	lockMutex(&rc->mutex);
+	if (rc->actorsById.count(id) == 0) {
+		unlockMutex(&rc->mutex);
 		return NULL;
 	}
 
-	CapturyActor_p ret = actorsById[id];
-	returnedActors[ret.get()] = ret;
-	unlockMutex(&mutex);
+	CapturyActor_p ret = rc->actorsById[id];
+	rc->returnedActors[ret.get()] = ret;
+	unlockMutex(&rc->mutex);
 
 	return ret.get();
 }
 
-extern "C" void Captury_freeActor(const CapturyActor* actor)
+extern "C" void Captury_freeActor(RemoteCaptury* rc, const CapturyActor* actor)
 {
-	lockMutex(&mutex);
-	auto it = returnedActors.find(actor);
-	if (it != returnedActors.end())
-		returnedActors.erase(it);
-	unlockMutex(&mutex);
+	lockMutex(&rc->mutex);
+	auto it = rc->returnedActors.find(actor);
+	if (it != rc->returnedActors.end())
+		rc->returnedActors.erase(it);
+	unlockMutex(&rc->mutex);
 }
 
 // returns the number of cameras
 // the array is owned by the library - do not free
-extern "C" int Captury_getCameras(const CapturyCamera** cams)
+extern "C" int Captury_getCameras(RemoteCaptury* rc, const CapturyCamera** cams)
 {
-	if (sock == -1 || cams == NULL)
+	if (rc->sock == -1 || cams == NULL)
 		return 0;
 
 	CapturyRequestPacket packet;
 	packet.type = capturyCameras;
 	packet.size = sizeof(packet);
 
-	if (numCameras == -1) {
-		if (!sendPacket(&packet, capturyCameras))
+	if (rc->numCameras == -1) {
+		if (!rc->sendPacket(&packet, capturyCameras))
 			return 0;
 
 		sleepMicroSeconds(10000);
 	}
 
 	static std::vector<CapturyCamera> camerasBuffer;
-	lockMutex(&mutex);
-	camerasBuffer = cameras;
-	unlockMutex(&mutex);
+	lockMutex(&rc->mutex);
+	camerasBuffer = rc->cameras;
+	unlockMutex(&rc->mutex);
 
 	if (camerasBuffer.empty())
 		*cams = NULL;
@@ -2163,13 +2220,13 @@ extern "C" int Captury_getCameras(const CapturyCamera** cams)
 }
 
 // get the last error message
-char* Captury_getLastErrorMessage()
+char* Captury_getLastErrorMessage(RemoteCaptury* rc)
 {
-	lockMutex(&mutex);
-	char* msg = new char[lastErrorMessage.size()+1];
-	memcpy(msg, &lastErrorMessage[0], lastErrorMessage.size());
-	msg[lastErrorMessage.size()] = 0;
-	unlockMutex(&mutex);
+	lockMutex(&rc->mutex);
+	char* msg = new char[rc->lastErrorMessage.size()+1];
+	memcpy(msg, &rc->lastErrorMessage[0], rc->lastErrorMessage.size());
+	msg[rc->lastErrorMessage.size()] = 0;
+	unlockMutex(&rc->mutex);
 
 	return msg;
 }
@@ -2181,20 +2238,25 @@ void Captury_freeErrorMessage(char* msg)
 
 
 // returns 1 if successful, 0 otherwise
-extern "C" int Captury_startStreaming(int what)
+extern "C" int Captury_startStreaming(RemoteCaptury* rc, int what)
 {
 	if ((what & CAPTURY_STREAM_IMAGES) != 0)
 		return 0;
 
-	return Captury_startStreamingImagesAndAngles(what, -1, 0, nullptr);
+	return rc->startStreamingImagesAndAngles(what, -1, 0, nullptr);
 }
 
-extern "C" int Captury_startStreamingImages(int what, int32_t camId)
+extern "C" int Captury_startStreamingImages(RemoteCaptury* rc, int what, int32_t camId)
 {
-	return Captury_startStreamingImagesAndAngles(what, camId, 0, nullptr);
+	return rc->startStreamingImagesAndAngles(what, camId, 0, nullptr);
 }
 
-extern "C" int Captury_startStreamingImagesAndAngles(int what, int32_t camId, int numAngles, uint16_t* angles)
+extern "C" int Captury_startStreamingImagesAndAngles(RemoteCaptury* rc, int what, int32_t camId, int numAngles, uint16_t* angles)
+{
+	return rc->startStreamingImagesAndAngles(what, camId, numAngles, angles);
+}
+
+int RemoteCaptury::startStreamingImagesAndAngles(int what, int32_t camId, int numAngles, uint16_t* angles)
 {
 	streamWhat = what;
 	streamCamera = camId;
@@ -2207,12 +2269,15 @@ extern "C" int Captury_startStreamingImagesAndAngles(int what, int32_t camId, in
 	log("start streaming %x, cam %d, %d angles\n", what, camId, numAngles);
 
 	if (what == CAPTURY_STREAM_NOTHING)
-		return Captury_stopStreaming();
+		return Captury_stopStreaming(this);
 
 	if (isStreamThreadRunning)
-		Captury_stopStreaming();
+		Captury_stopStreaming(this);
 
-	CapturyStreamPacket1Tcp* packet = (CapturyStreamPacket1Tcp*)malloc(sizeof(CapturyStreamPacketTcp) + (numAngles ? (2 + numAngles * 2) : 0));
+	RemoteCaptury** rec = (RemoteCaptury**)malloc(sizeof(RemoteCaptury*) + sizeof(CapturyStreamPacketTcp) + (numAngles ? (2 + numAngles * 2) : 0));
+	rec[0] = this;
+	CapturyStreamPacket1Tcp* packet = (CapturyStreamPacket1Tcp*)&rec[1];
+
 	packet->type = capturyStream;
 	packet->size = sizeof(CapturyStreamPacketTcp) + (numAngles ? (2 + numAngles * 2) : 0);
 	if (camId != -1) // only stream images if a camera is specified
@@ -2238,28 +2303,28 @@ extern "C" int Captury_startStreamingImagesAndAngles(int what, int32_t camId, in
 
 	stopStreamThread = 0;
 #ifdef WIN32
-	streamThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)streamLoop, packet, 0, NULL);
+	streamThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)::streamLoop, rec, 0, NULL);
 #else
-	pthread_create(&streamThread, NULL, streamLoop, packet);
+	pthread_create(&streamThread, NULL, ::streamLoop, rec);
 #endif
 
 	return 1;
 }
 
 // returns 1 if successful, 0 otherwise
-extern "C" int Captury_stopStreaming(int wait)
+extern "C" int Captury_stopStreaming(RemoteCaptury* rc, int wait)
 {
-	if (sock == -1)
+	if (rc->sock == -1)
 		return 0;
 
-	stopStreamThread = 1;
+	rc->stopStreamThread = 1;
 
 	if (wait) {
 #ifdef WIN32
-		WaitForSingleObject(streamThread, 1000);
+		WaitForSingleObject(rc->streamThread, 1000);
 #else
 		void* retVal;
-		pthread_join(streamThread, &retVal);
+		pthread_join(rc->streamThread, &retVal);
 #endif
 	}
 
@@ -2269,12 +2334,17 @@ extern "C" int Captury_stopStreaming(int wait)
 // fills the pose with the current pose for the given actor
 // the client is responsible for providing sufficient space (actor->numJoints*6) in pose->values
 // returns 1 if successful, 0 otherwise
-extern "C" CapturyPose* Captury_getCurrentPoseForActor(int actorId)
+extern "C" CapturyPose* Captury_getCurrentPoseForActor(RemoteCaptury* rc, int actorId)
 {
-	return Captury_getCurrentPoseAndTrackingConsistencyForActor(actorId, nullptr);
+	return rc->getCurrentPoseAndTrackingConsistencyForActor(actorId, nullptr);
 }
 
-extern "C" CapturyPose* Captury_getCurrentPoseAndTrackingConsistencyForActor(int actorId, int* tc)
+extern "C" CapturyPose* Captury_getCurrentPoseAndTrackingConsistencyForActor(RemoteCaptury* rc, int actorId, int* tc)
+{
+	return rc->getCurrentPoseAndTrackingConsistencyForActor(actorId, tc);
+}
+
+CapturyPose* RemoteCaptury::getCurrentPoseAndTrackingConsistencyForActor(int actorId, int* tc)
 {
 	// check whether any actor changed status
 	uint64_t now = getTime() - 500000; // half a second ago
@@ -2296,7 +2366,7 @@ extern "C" CapturyPose* Captury_getCurrentPoseAndTrackingConsistencyForActor(int
 
 	unlockMutex(&mutex);
 	for (int id : stoppedActorIds)
-		actorChangedCallback(id, ACTOR_STOPPED, actorChangedArg);
+		actorChangedCallback(this, id, ACTOR_STOPPED, actorChangedArg);
 	lockMutex(&mutex);
 
 	if (!stillCurrent) {
@@ -2340,18 +2410,18 @@ extern "C" CapturyPose* Captury_getCurrentPoseAndTrackingConsistencyForActor(int
 	return pose;
 }
 
-extern "C" CapturyPose* Captury_getCurrentPose(int actorId)
+extern "C" CapturyPose* Captury_getCurrentPose(RemoteCaptury* rc, int actorId)
 {
 	int tc;
-	return Captury_getCurrentPoseAndTrackingConsistencyForActor(actorId, &tc);
+	return rc->getCurrentPoseAndTrackingConsistencyForActor(actorId, &tc);
 }
 
-extern "C" CapturyAngleData* Captury_getCurrentAngles(int actorId, int* numAngles)
+extern "C" CapturyAngleData* Captury_getCurrentAngles(RemoteCaptury* rc, int actorId, int* numAngles)
 {
-	if (currentAngles.count(actorId)) {
+	if (rc->currentAngles.count(actorId)) {
 		if (numAngles != nullptr)
-			*numAngles = (int)currentAngles[actorId].size();
-		return currentAngles[actorId].data();
+			*numAngles = (int)rc->currentAngles[actorId].size();
+		return rc->currentAngles[actorId].data();
 	} else {
 		if (numAngles != nullptr)
 			*numAngles = 0;
@@ -2359,9 +2429,9 @@ extern "C" CapturyAngleData* Captury_getCurrentAngles(int actorId, int* numAngle
 	}
 }
 
-extern "C" CapturyPose* Captury_getCurrentPoseAndTrackingConsistency(int actorId, int* tc)
+extern "C" CapturyPose* Captury_getCurrentPoseAndTrackingConsistency(RemoteCaptury* rc, int actorId, int* tc)
 {
-	return Captury_getCurrentPoseAndTrackingConsistencyForActor(actorId, tc);
+	return rc->getCurrentPoseAndTrackingConsistencyForActor(actorId, tc);
 }
 
 CAPTURY_DLL_EXPORT CapturyPose* Captury_clonePose(const CapturyPose* pose)
@@ -2386,33 +2456,33 @@ extern "C" void Captury_freePose(CapturyPose* pose)
 		free(pose);
 }
 
-extern "C" int Captury_getActorStatus(int actorId)
+extern "C" int Captury_getActorStatus(RemoteCaptury* rc, int actorId)
 {
-	lockMutex(&mutex);
-	std::unordered_map<int, ActorData>::iterator it = actorData.find(actorId);
-	if (it == actorData.end()) {
-		unlockMutex(&mutex);
+	lockMutex(&rc->mutex);
+	std::unordered_map<int, ActorData>::iterator it = rc->actorData.find(actorId);
+	if (it == rc->actorData.end()) {
+		unlockMutex(&rc->mutex);
 		return ACTOR_UNKNOWN;
 	}
 
 	CapturyActorStatus status = it->second.status;
-	unlockMutex(&mutex);
+	unlockMutex(&rc->mutex);
 
 	return status;
 }
 
-extern "C" CapturyARTag* Captury_getCurrentARTags()
+extern "C" CapturyARTag* Captury_getCurrentARTags(RemoteCaptury* rc)
 {
 	uint64_t now = getTime();
-	lockMutex(&mutex);
-	if (now > arTagsTime + 100000) { // 100ms
-		unlockMutex(&mutex);
+	lockMutex(&rc->mutex);
+	if (now > rc->arTagsTime + 100000) { // 100ms
+		unlockMutex(&rc->mutex);
 		return NULL;
 	}
-	int numARTags = (int)arTags.size();
+	int numARTags = (int)rc->arTags.size();
 	CapturyARTag* artags = (CapturyARTag*)malloc(sizeof(CapturyARTag) * (numARTags+1));
-	memcpy(artags, &arTags[0], sizeof(CapturyARTag) * numARTags);
-	unlockMutex(&mutex);
+	memcpy(artags, &rc->arTags[0], sizeof(CapturyARTag) * numARTags);
+	unlockMutex(&rc->mutex);
 
 	artags[numARTags].id = -1;
 	return artags;
@@ -2428,9 +2498,9 @@ extern "C" void Captury_freeARTags(CapturyARTag* artags)
 
 // requests an update of the texture for the given actor. non-blocking
 // returns 1 if successful otherwise 0
-extern "C" int Captury_requestTexture(int actorId)
+extern "C" int Captury_requestTexture(RemoteCaptury* rc, int actorId)
 {
-	if (sock == -1)
+	if (rc->sock == -1)
 		return 0;
 
 	CapturyGetImagePacket packet;
@@ -2440,26 +2510,26 @@ extern "C" int Captury_requestTexture(int actorId)
 
 //	log("requesting texture for actor %x\n", actor->id);
 
-	if (!sendPacket((CapturyRequestPacket*)&packet, capturyImageHeader))
+	if (!rc->sendPacket((CapturyRequestPacket*)&packet, capturyImageHeader))
 		return 0;
 
 	return 1;
 }
 
 // returns a texture image of the specified actor
-extern "C" CapturyImage* Captury_getTexture(int actorId)
+extern "C" CapturyImage* Captury_getTexture(RemoteCaptury* rc, int actorId)
 {
 	// check if we don't have a texture yet
-	lockMutex(&mutex);
-	std::unordered_map<int, ActorData>::iterator it = actorData.find(actorId);
-	if (it == actorData.end()) {
-		unlockMutex(&mutex);
+	lockMutex(&rc->mutex);
+	std::unordered_map<int, ActorData>::iterator it = rc->actorData.find(actorId);
+	if (it == rc->actorData.end()) {
+		unlockMutex(&rc->mutex);
 		return 0;
 	}
 
 	// create a copy of all data
 	const int size = it->second.currentTextures.width * it->second.currentTextures.height * 3;
-	CapturyImage* image = (CapturyImage*) malloc(sizeof(CapturyImage) + size);
+	CapturyImage* image = (CapturyImage*)malloc(sizeof(CapturyImage) + size);
 	image->width = it->second.currentTextures.width;
 	image->height = it->second.currentTextures.height;
 	image->camera = -1;
@@ -2468,7 +2538,7 @@ extern "C" CapturyImage* Captury_getTexture(int actorId)
 	image->gpuData = nullptr;
 
 	memcpy(image->data, it->second.currentTextures.data, size);
-	unlockMutex(&mutex);
+	unlockMutex(&rc->mutex);
 
 	return image;
 }
@@ -2483,9 +2553,9 @@ extern "C" void Captury_freeImage(CapturyImage* image)
 
 // requests an update of the texture for the given actor. blocking
 // returns 1 if successful otherwise 0
-extern "C" uint64_t Captury_getMarkerTransform(int actorId, int joint, CapturyTransform* trafo)
+extern "C" uint64_t Captury_getMarkerTransform(RemoteCaptury* rc, int actorId, int joint, CapturyTransform* trafo)
 {
-	if (sock == -1)
+	if (rc->sock == -1)
 		return 0;
 
 	if (joint < 0)
@@ -2502,44 +2572,44 @@ extern "C" uint64_t Captury_getMarkerTransform(int actorId, int joint, CapturyTr
 
 	//log("requesting marker transform for actor.joint %d.%d\n", actor->id, joint);
 
-	if (!sendPacket((CapturyRequestPacket*)&packet, capturyMarkerTransform))
+	if (!rc->sendPacket((CapturyRequestPacket*)&packet, capturyMarkerTransform))
 		return 0;
 
 	ActorAndJoint aj(actorId, joint);
-	if (markerTransforms.count(aj) == 0)
+	if (rc->markerTransforms.count(aj) == 0)
 		return 0;
 
-	*trafo = markerTransforms[aj].trafo;
+	*trafo = rc->markerTransforms[aj].trafo;
 
-	return getRemoteTime(markerTransforms[aj].timestamp);
+	return rc->getRemoteTime(rc->markerTransforms[aj].timestamp);
 }
 
-extern "C" int Captury_getScalingProgress(int actorId)
+extern "C" int Captury_getScalingProgress(RemoteCaptury* rc, int actorId)
 {
-	lockMutex(&mutex);
-	int scaling = actorData.count(actorId) ? actorData[actorId].scalingProgress : 0;
-	unlockMutex(&mutex);
+	lockMutex(&rc->mutex);
+	int scaling = rc->actorData.count(actorId) ? rc->actorData[actorId].scalingProgress : 0;
+	unlockMutex(&rc->mutex);
 	return scaling;
 }
 
-extern "C" int Captury_getTrackingQuality(int actorId)
+extern "C" int Captury_getTrackingQuality(RemoteCaptury* rc, int actorId)
 {
-	lockMutex(&mutex);
-	auto it = actorData.find(actorId);
-	if (it == actorData.end()) {
-		unlockMutex(&mutex);
+	lockMutex(&rc->mutex);
+	auto it = rc->actorData.find(actorId);
+	if (it == rc->actorData.end()) {
+		unlockMutex(&rc->mutex);
 		return 0;
 	}
 	int quality = it->second.trackingQuality;
-	unlockMutex(&mutex);
+	unlockMutex(&rc->mutex);
 
 	return quality;
 }
 
 // change the name of the actor
-extern "C" int Captury_setActorName(int actorId, const char* name)
+extern "C" int Captury_setActorName(RemoteCaptury* rc, int actorId, const char* name)
 {
-	if (sock == -1)
+	if (rc->sock == -1)
 		return 0;
 
 	CapturySetActorNamePacket packet;
@@ -2549,39 +2619,17 @@ extern "C" int Captury_setActorName(int actorId, const char* name)
 	strncpy(packet.name, name, 32);
 	packet.name[31] = '\0';
 
-	if (!sendPacket((CapturyRequestPacket*)&packet, capturySetActorNameAck))
+	if (!rc->sendPacket((CapturyRequestPacket*)&packet, capturySetActorNameAck))
 		return 0;
-
-	return 1;
-}
-
-// fills the pointers with the current day, session, shot tuple that is used in CapturyLive to identify a shot
-// the strings are owned by the library - do not free or overwrite
-// returns 1 if successful, 0 otherwise
-extern "C" int Captury_getCurrentDaySessionShot(const char** day, const char** session, const char** shot)
-{
-	if (sock == -1 || day == NULL || session == NULL || shot == NULL)
-		return 0;
-
-	CapturyRequestPacket packet;
-	packet.type = capturyDaySessionShot;
-	packet.size = sizeof(packet);
-
-	if (!sendPacket(&packet, capturyDaySessionShot))
-		return 0;
-
-	*day = &currentDay[0];
-	*session = &currentSession[0];
-	*shot = &currentShot[0];
 
 	return 1;
 }
 
 // sets the shot name for the next recording
 // returns 1 if successful, 0 otherwise
-extern "C" int Captury_setShotName(const char* name)
+extern "C" int Captury_setShotName(RemoteCaptury* rc, const char* name)
 {
-	if (sock == -1 || name == NULL)
+	if (rc->sock == -1 || name == NULL)
 		return 0;
 
 	if (strlen(name) > 99)
@@ -2592,7 +2640,7 @@ extern "C" int Captury_setShotName(const char* name)
 	packet.size = sizeof(packet);
 	strncpy(packet.shot, name, sizeof(packet.shot));
 
-	if (!sendPacket((CapturyRequestPacket*)&packet, capturySetShotAck))
+	if (!rc->sendPacket((CapturyRequestPacket*)&packet, capturySetShotAck))
 		return 0;
 
 	return 1;
@@ -2600,40 +2648,40 @@ extern "C" int Captury_setShotName(const char* name)
 
 // you have to set the shot name before starting to record - or make sure that it has been set using CapturyLive
 // returns 1 if successful, 0 otherwise
-extern "C" int64_t Captury_startRecording()
+extern "C" int64_t Captury_startRecording(RemoteCaptury* rc)
 {
-	if (sock == -1)
+	if (rc->sock == -1)
 		return 0;
 
 	CapturyRequestPacket packet;
 	packet.type = capturyStartRecording2;
 	packet.size = sizeof(packet);
 
-	startRecordingTime = 0;
+	rc->startRecordingTime = 0;
 
-	if (!sendPacket(&packet, capturyStartRecordingAck2))
+	if (!rc->sendPacket(&packet, capturyStartRecordingAck2))
 		return 0;
 
 	for (int i = 0; i < 100; ++i) {
 		sleepMicroSeconds(1000);
-		if (startRecordingTime != 0)
-			return startRecordingTime;
+		if (rc->startRecordingTime != 0)
+			return rc->startRecordingTime;
 	}
 
-	return startRecordingTime;
+	return rc->startRecordingTime;
 }
 
 // returns 1 if successful, 0 otherwise
-extern "C" int Captury_stopRecording()
+extern "C" int Captury_stopRecording(RemoteCaptury* rc)
 {
-	if (sock == -1)
+	if (rc->sock == -1)
 		return 0;
 
 	CapturyRequestPacket packet;
 	packet.type = capturyStopRecording;
 	packet.size = sizeof(packet);
 
-	if (!sendPacket(&packet, capturyStopRecordingAck))
+	if (!rc->sendPacket(&packet, capturyStopRecordingAck))
 		return 0;
 
 	return 1;
@@ -2645,272 +2693,86 @@ static DWORD WINAPI syncLoop(void* arg)
 static void* syncLoop(void* arg)
 #endif
 {
+	RemoteCaptury* rc = (RemoteCaptury*)arg;
 	CapturyTimePacket2 packet;
 	packet.type = capturyGetTime2;
 	packet.size = sizeof(packet);
 
 	while (true) {
-		++nextTimeId;
-		packet.timeId = nextTimeId;
+		++rc->nextTimeId;
+		packet.timeId = rc->nextTimeId;
 
-		pingTime = getTime();
-		sendPacket((CapturyRequestPacket*)&packet, capturyTime2);
+		rc->pingTime = getTime();
+		rc->sendPacket((CapturyRequestPacket*)&packet, capturyTime2);
 
 		sleepMicroSeconds(1000000);
 	}
 }
 
-extern "C" void Captury_startTimeSynchronizationLoop()
+extern "C" void Captury_startTimeSynchronizationLoop(RemoteCaptury* rc)
 {
-	if (syncLoopIsRunning)
+	if (rc->syncLoopIsRunning)
 		return;
 
 #ifdef WIN32
-	syncThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)syncLoop, NULL, 0, NULL);
+	rc->syncThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)syncLoop, rc, 0, NULL);
 #else
-	pthread_create(&syncThread, NULL, syncLoop, NULL);
+	pthread_create(&rc->syncThread, NULL, syncLoop, rc);
 #endif
 
-	syncLoopIsRunning = true;
+	rc->syncLoopIsRunning = true;
 }
 
-extern "C" uint64_t Captury_synchronizeTime()
+extern "C" uint64_t Captury_synchronizeTime(RemoteCaptury* rc)
 {
 	CapturyTimePacket2 packet;
 	packet.type = capturyGetTime2;
 	packet.size = sizeof(packet);
-	++nextTimeId;
-	packet.timeId = nextTimeId;
+	++rc->nextTimeId;
+	packet.timeId = rc->nextTimeId;
 
-	pingTime = getTime();
+	rc->pingTime = getTime();
 
-	if (!sendPacket((CapturyRequestPacket*)&packet, capturyTime2)) {
+	if (!rc->sendPacket((CapturyRequestPacket*)&packet, capturyTime2)) {
 		CapturyRequestPacket req;
 		req.type = capturyGetTime;
 		req.size = sizeof(req);
-		if (!sendPacket((CapturyRequestPacket*)&req, capturyTime))
+		if (!rc->sendPacket((CapturyRequestPacket*)&req, capturyTime))
 			return 0;
 	}
 
-	return Captury_getTime();
+	return Captury_getTime(rc);
 }
 
-extern "C" int64_t Captury_getTimeOffset()
+extern "C" int64_t Captury_getTimeOffset(RemoteCaptury* rc)
 {
-	lockMutex(&syncMutex);
-	int64_t offset = (int64_t)currentSync.offset;
-	unlockMutex(&syncMutex);
+	lockMutex(&rc->syncMutex);
+	int64_t offset = (int64_t)rc->currentSync.offset;
+	unlockMutex(&rc->syncMutex);
 	return offset;
 }
 
-extern "C" void Captury_getFramerate(int* numerator, int* denominator)
+extern "C" void Captury_getFramerate(RemoteCaptury* rc, int* numerator, int* denominator)
 {
 	CapturyRequestPacket packet;
 	packet.type = capturyGetFramerate;
 	packet.size = sizeof(packet);
 
-	if (!sendPacket((CapturyRequestPacket*)&packet, capturyFramerate)) {
+	if (!rc->sendPacket((CapturyRequestPacket*)&packet, capturyFramerate)) {
 		*numerator = -1;
 		*denominator = -1;
 		return;
 	}
 
-	*numerator = framerateNumerator;
-	*denominator = framerateDenominator;
+	*numerator = rc->framerateNumerator;
+	*denominator = rc->framerateDenominator;
 }
 
-extern "C" int Captury_setHalfplaneConstraint(int actorId, int jointIndex, float* originOffset, float* normal, float offset, uint64_t timestamp, float weight)
+int Captury_registerNewPoseCallback(RemoteCaptury* rc, CapturyNewPoseCallback callback, void* userArg)
 {
-	CapturyConstraintPacket ccp;
-	ccp.type = capturyConstraint;
-	ccp.size = sizeof(ccp);
-	ccp.constrType = CAPTURY_CONSTRAINT_HALF_PLANE;
-	ccp.originActor = actorId;
-	ccp.originJoint = jointIndex;
-	ccp.originOffset[0] = originOffset[0];
-	ccp.originOffset[1] = originOffset[1];
-	ccp.originOffset[2] = originOffset[2];
-	ccp.targetActor = -1;
-	ccp.targetJoint = -1;
-	ccp.targetVector[0] = normal[0];
-	ccp.targetVector[1] = normal[1];
-	ccp.targetVector[2] = normal[2];
-	ccp.targetValue = offset;
-	ccp.targetRotation[0] = 0.0;
-	ccp.targetRotation[1] = 0.0;
-	ccp.targetRotation[2] = 0.0;
-	ccp.targetRotation[3] = 0.0;
-	ccp.weight = weight;
-
-	if (!sendPacket((CapturyRequestPacket*)&ccp, capturyError))
-		return 0;
-
-	return 1;
-}
-
-extern "C" int Captury_setRotationConstraint(int actorId, int jointIndex, float* rotation, uint64_t timestamp, float weight)
-{
-	CapturyConstraintPacket ccp;
-	ccp.type = capturyConstraint;
-	ccp.size = sizeof(ccp);
-	ccp.constrType = CAPTURY_CONSTRAINT_ROTATION;
-	ccp.originActor = actorId;
-	ccp.originJoint = jointIndex;
-	ccp.originOffset[0] = 0.0f;
-	ccp.originOffset[1] = 0.0f;
-	ccp.originOffset[2] = 0.0f;
-	ccp.targetActor = -1;
-	ccp.targetJoint = -1;
-	ccp.targetVector[0] = 0.0f;
-	ccp.targetVector[1] = 0.0f;
-	ccp.targetVector[2] = 0.0f;
-	ccp.targetRotation[0] = rotation[0];
-	ccp.targetRotation[1] = rotation[1];
-	ccp.targetRotation[2] = rotation[2];
-	ccp.targetRotation[3] = rotation[3];
-	ccp.weight = weight;
-
-	if (!sendPacket((CapturyRequestPacket*)&ccp, capturyError))
-		return 0;
-
-	return 1;
-}
-
-extern "C" int Captury_setFixedAxisConstraint(int actorId, int jointIndex, float* axis, float* targetAxis, uint64_t timestamp, float weight)
-{
-	CapturyConstraintPacket ccp;
-	ccp.type = capturyConstraint;
-	ccp.size = sizeof(ccp);
-	ccp.constrType = CAPTURY_CONSTRAINT_FIXED_AXIS;
-	ccp.originActor = actorId;
-	ccp.originJoint = jointIndex;
-	ccp.originOffset[0] = axis[0];
-	ccp.originOffset[1] = axis[1];
-	ccp.originOffset[2] = axis[2];
-	ccp.targetActor = -1;
-	ccp.targetJoint = -1;
-	ccp.targetVector[0] = targetAxis[0];
-	ccp.targetVector[1] = targetAxis[1];
-	ccp.targetVector[2] = targetAxis[2];
-	ccp.targetRotation[0] = 0.0;
-	ccp.targetRotation[1] = 0.0;
-	ccp.targetRotation[2] = 0.0;
-	ccp.targetRotation[3] = 0.0;
-	ccp.weight = weight;
-
-	if (!sendPacket((CapturyRequestPacket*)&ccp, capturyError))
-		return 0;
-
-	return 1;
-}
-
-extern "C" int Captury_setOffsetConstraint(int originActorId, int originJointIndex, float* originOffset, int targetActorId, int targetJointIndex, float* targetOffset, float* offset, uint64_t timestamp, float weight)
-{
-	CapturyConstraintPacket ccp;
-	ccp.type = capturyConstraint;
-	ccp.size = sizeof(ccp);
-	ccp.constrType = CAPTURY_CONSTRAINT_OFFSET;
-	ccp.originActor = originActorId;
-	ccp.originJoint = originJointIndex;
-	ccp.originOffset[0] = originOffset[0];
-	ccp.originOffset[1] = originOffset[1];
-	ccp.originOffset[2] = originOffset[2];
-	ccp.targetActor = targetActorId;
-	ccp.targetJoint = targetJointIndex;
-	ccp.targetOffset[0] = targetOffset[0];
-	ccp.targetOffset[1] = targetOffset[1];
-	ccp.targetOffset[2] = targetOffset[2];
-	ccp.targetVector[0] = offset[0];
-	ccp.targetVector[1] = offset[1];
-	ccp.targetVector[2] = offset[2];
-	ccp.targetRotation[0] = 0.0;
-	ccp.targetRotation[1] = 0.0;
-	ccp.targetRotation[2] = 0.0;
-	ccp.targetRotation[3] = 0.0;
-	ccp.weight = weight;
-
-	if (!sendPacket((CapturyRequestPacket*)&ccp, capturyError))
-		return 0;
-
-	return 1;
-}
-
-int Captury_setDistanceConstraint(int originActorId, int originJointIndex, float* originOffset, int targetActorId, int targetJointIndex, float* targetOffset, float distance, uint64_t timestamp, float weight)
-{
-	CapturyConstraintPacket ccp;
-	ccp.type = capturyConstraint;
-	ccp.size = sizeof(ccp);
-	ccp.constrType = CAPTURY_CONSTRAINT_DISTANCE;
-	ccp.originActor = originActorId;
-	ccp.originJoint = originJointIndex;
-	ccp.originOffset[0] = originOffset[0];
-	ccp.originOffset[1] = originOffset[1];
-	ccp.originOffset[2] = originOffset[2];
-	ccp.targetActor = targetActorId;
-	ccp.targetJoint = targetJointIndex;
-	ccp.targetOffset[0] = targetOffset[0];
-	ccp.targetOffset[1] = targetOffset[1];
-	ccp.targetOffset[2] = targetOffset[2];
-	ccp.targetValue = distance;
-	ccp.targetRotation[0] = 0.0;
-	ccp.targetRotation[1] = 0.0;
-	ccp.targetRotation[2] = 0.0;
-	ccp.targetRotation[3] = 0.0;
-	ccp.weight = weight;
-
-	if (!sendPacket((CapturyRequestPacket*)&ccp, capturyError))
-		return 0;
-
-	return 1;
-}
-
-int Captury_setRelativeRotationConstraint(int originActorId, int originJointIndex, int targetActorId, int targetJointIndex, float* rotation, uint64_t timestamp, float weight)
-{
-	CapturyConstraintPacket ccp;
-	ccp.type = capturyConstraint;
-	ccp.size = sizeof(ccp);
-	ccp.constrType = CAPTURY_CONSTRAINT_ROTATION;
-	ccp.originActor = originActorId;
-	ccp.originJoint = originJointIndex;
-	ccp.targetActor = targetActorId;
-	ccp.targetJoint = targetJointIndex;
-	ccp.targetVector[0] = 0.0f;
-	ccp.targetVector[1] = 0.0f;
-	ccp.targetVector[2] = 0.0f;
-	ccp.targetRotation[0] = rotation[0];
-	ccp.targetRotation[1] = rotation[1];
-	ccp.targetRotation[2] = rotation[2];
-	ccp.targetRotation[3] = rotation[3];
-	ccp.weight = weight;
-
-	if (!sendPacket((CapturyRequestPacket*)&ccp, capturyError))
-		return 0;
-
-	return 1;
-}
-
-int Captury_sendCustomPacket(char* pluginName, int size, void* data)
-{
-	std::vector<unsigned char> buffer(sizeof(CapturyCustomPacket) + size);
-	CapturyCustomPacket* ccp = (CapturyCustomPacket*) &buffer[0];
-	ccp->type = capturyCustom;
-	ccp->size = (int)buffer.size();
-	strncpy(ccp->name, pluginName, 15);
-	ccp->name[15] = '\0';
-	memcpy(ccp->data, data, size);
-
-	if (!sendPacket((CapturyRequestPacket*)&ccp, capturyCustomAck))
-		return 0;
-
-	return 1;
-}
-
-
-int Captury_registerNewPoseCallback(CapturyNewPoseCallback callback, void* userArg)
-{
-	if (newPoseCallback != NULL) { // callback already exists
+	if (rc->newPoseCallback != NULL) { // callback already exists
 		if (callback == NULL) { // remove callback
-			newPoseCallback = NULL;
+			rc->newPoseCallback = NULL;
 			return 1;
 		} else
 			return 0;
@@ -2919,17 +2781,17 @@ int Captury_registerNewPoseCallback(CapturyNewPoseCallback callback, void* userA
 	if (callback == NULL) // trying to erase callback that is not there
 		return 0;
 
-	newPoseCallback = callback;
-	newPoseArg = userArg;
+	rc->newPoseCallback = callback;
+	rc->newPoseArg = userArg;
 	return 1;
 }
 
 
-int Captury_registerNewAnglesCallback(CapturyNewAnglesCallback callback, void* userArg)
+int Captury_registerNewAnglesCallback(RemoteCaptury* rc, CapturyNewAnglesCallback callback, void* userArg)
 {
-	if (newAnglesCallback != NULL) { // callback already exists
+	if (rc->newAnglesCallback != NULL) { // callback already exists
 		if (callback == NULL) { // remove callback
-			newAnglesCallback = NULL;
+			rc->newAnglesCallback = NULL;
 			return 1;
 		} else
 			return 0;
@@ -2938,17 +2800,17 @@ int Captury_registerNewAnglesCallback(CapturyNewAnglesCallback callback, void* u
 	if (callback == NULL) // trying to erase callback that is not there
 		return 0;
 
-	newAnglesCallback = callback;
-	newAnglesArg = userArg;
+	rc->newAnglesCallback = callback;
+	rc->newAnglesArg = userArg;
 	return 1;
 }
 
 
-int Captury_registerActorChangedCallback(CapturyActorChangedCallback callback, void* userArg)
+int Captury_registerActorChangedCallback(RemoteCaptury* rc, CapturyActorChangedCallback callback, void* userArg)
 {
-	if (actorChangedCallback != NULL) { // callback already exists
+	if (rc->actorChangedCallback != NULL) { // callback already exists
 		if (callback == NULL) { // remove callback
-			actorChangedCallback = NULL;
+			rc->actorChangedCallback = NULL;
 			return 1;
 		} else
 			return 0;
@@ -2957,17 +2819,17 @@ int Captury_registerActorChangedCallback(CapturyActorChangedCallback callback, v
 	if (callback == NULL) // trying to erase callback that is not there
 		return 0;
 
-	actorChangedCallback = callback;
-	actorChangedArg = userArg;
+	rc->actorChangedCallback = callback;
+	rc->actorChangedArg = userArg;
 	return 1;
 }
 
 
-int Captury_registerARTagCallback(CapturyARTagCallback callback, void* userArg)
+int Captury_registerARTagCallback(RemoteCaptury* rc, CapturyARTagCallback callback, void* userArg)
 {
-	if (arTagCallback != NULL) { // callback already exists
+	if (rc->arTagCallback != NULL) { // callback already exists
 		if (callback == NULL) { // remove callback
-			arTagCallback = NULL;
+			rc->arTagCallback = NULL;
 			return 1;
 		} else
 			return 0;
@@ -2976,45 +2838,28 @@ int Captury_registerARTagCallback(CapturyARTagCallback callback, void* userArg)
 	if (callback == NULL) // trying to erase callback that is not there
 		return 0;
 
-	arTagCallback = callback;
-	arTagArg = userArg;
+	rc->arTagCallback = callback;
+	rc->arTagArg = userArg;
 	return 1;
 }
 
 
-int Captury_registerImageStreamingCallback(CapturyImageCallback callback, void* userArg)
+int Captury_registerImageStreamingCallback(RemoteCaptury* rc, CapturyImageCallback callback, void* userArg)
 {
-	if (imageCallback != NULL) {
+	if (rc->imageCallback != NULL) {
 		if (callback == NULL) { // callback already exists
-			imageCallback = NULL;
+			rc->imageCallback = NULL;
 			return 1;
 		}
 		// remove existing callback
 	} else if (callback == NULL) // trying to erase callback that is not there
 		return 0;
 
-	imageCallback = callback;
-	imageArg = userArg;
+	rc->imageCallback = callback;
+	rc->imageArg = userArg;
 	return 1;
 }
 
-
-int Captury_registerCustomPacketCallback(const char* pluginName, CapturyCustomPacketCallback callback)
-{
-	if (callbacks.count(pluginName)) { // callback already exists
-		if (callback == NULL) { // remove callback
-			callbacks.erase(pluginName);
-			return 1;
-		} else
-			return 0;
-	}
-
-	if (callback == NULL) // trying to erase callback that is not there
-		return 0;
-
-	callbacks.insert(std::make_pair(pluginName, callback));
-	return 1;
-}
 
 #ifndef DEG2RADf
 #define DEG2RADf		(0.0174532925199432958f)
@@ -3106,12 +2951,12 @@ static void decompose(const float* mat, float* euler) // checked
 // 	log("%.4f %.4f %.4f  %.4f\n", mat[12], mat[13], mat[14], mat[15]);
 // }
 
-void Captury_convertPoseToLocal(CapturyPose* pose, int actorId) REQUIRES(mutex)
+void Captury_convertPoseToLocal(RemoteCaptury* rc, CapturyPose* pose, int actorId) REQUIRES(mutex)
 {
-	if (actorsById.count(actorId) == 0)
+	if (rc->actorsById.count(actorId) == 0)
 		return;
 
-	CapturyActor* actor = actorsById[actorId].get();
+	CapturyActor* actor = rc->actorsById[actorId].get();
 	CapturyTransform* at = pose->transforms;
 	float* matrices = (float*)malloc(sizeof(float) * 16 * actor->numJoints);
 	for (int i = 0; i < actor->numJoints; ++i, ++at) {
@@ -3150,20 +2995,20 @@ void Captury_convertPoseToLocal(CapturyPose* pose, int actorId) REQUIRES(mutex)
 }
 
 
-extern "C" int Captury_snapActor(float x, float z, float heading)
+extern "C" int Captury_snapActor(RemoteCaptury* rc, float x, float z, float heading)
 {
-	return Captury_snapActorEx(x, z, 1000.0f, heading, "", SNAP_DEFAULT, 0);
+	return Captury_snapActorEx(rc, x, z, 1000.0f, heading, "", SNAP_DEFAULT, 0);
 }
 
-extern "C" int Captury_snapActorEx(float x, float z, float radius, float heading, const char* skeletonName, int snapMethod, int quickScaling)
+extern "C" int Captury_snapActorEx(RemoteCaptury* rc, float x, float z, float radius, float heading, const char* skeletonName, int snapMethod, int quickScaling)
 {
-	if (sock == -1) {
-		lastErrorMessage = "socket is not open";
+	if (rc->sock == -1) {
+		rc->lastErrorMessage = "socket is not open";
 		return 0;
 	}
 
 	if (snapMethod < SNAP_BACKGROUND_LOCAL || snapMethod > SNAP_DEFAULT) {
-		lastErrorMessage = "invalid parameter: snapMethod";
+		rc->lastErrorMessage = "invalid parameter: snapMethod";
 		return 0;
 	}
 
@@ -3179,15 +3024,15 @@ extern "C" int Captury_snapActorEx(float x, float z, float radius, float heading
 	strncpy(packet.skeletonName, skeletonName, 32);
 	packet.skeletonName[31] = '\0';
 
-	if (!sendPacket((CapturyRequestPacket*)&packet, capturySnapActorAck))
+	if (!rc->sendPacket((CapturyRequestPacket*)&packet, capturySnapActorAck))
 		return 0;
 
 	return 1;
 }
 
-extern "C" int Captury_startTracking(int actorId, float x, float z, float heading)
+extern "C" int Captury_startTracking(RemoteCaptury* rc, int actorId, float x, float z, float heading)
 {
-	if (sock == -1)
+	if (rc->sock == -1)
 		return 0;
 
 	CapturyStartTrackingPacket packet;
@@ -3198,15 +3043,15 @@ extern "C" int Captury_startTracking(int actorId, float x, float z, float headin
 	packet.z = z;
 	packet.heading = heading;
 
-	if (!sendPacket((CapturyRequestPacket*)&packet, capturyStartTrackingAck))
+	if (!rc->sendPacket((CapturyRequestPacket*)&packet, capturyStartTrackingAck))
 		return 0;
 
 	return 1;
 }
 
-extern "C" int Captury_rescaleActor(int actorId)
+extern "C" int Captury_rescaleActor(RemoteCaptury* rc, int actorId)
 {
-	if (sock == -1)
+	if (rc->sock == -1)
 		return 0;
 
 	CapturyStopTrackingPacket packet;
@@ -3214,15 +3059,15 @@ extern "C" int Captury_rescaleActor(int actorId)
 	packet.size = sizeof(packet);
 	packet.actor = actorId;
 
-	if (!sendPacket((CapturyRequestPacket*)&packet, capturyRescaleActorAck))
+	if (!rc->sendPacket((CapturyRequestPacket*)&packet, capturyRescaleActorAck))
 		return 0;
 
 	return 1;
 }
 
-extern "C" int Captury_recolorActor(int actorId)
+extern "C" int Captury_recolorActor(RemoteCaptury* rc, int actorId)
 {
-	if (sock == -1)
+	if (rc->sock == -1)
 		return 0;
 
 	CapturyStopTrackingPacket packet;
@@ -3230,15 +3075,15 @@ extern "C" int Captury_recolorActor(int actorId)
 	packet.size = sizeof(packet);
 	packet.actor = actorId;
 
-	if (!sendPacket((CapturyRequestPacket*)&packet, capturyRecolorActorAck))
+	if (!rc->sendPacket((CapturyRequestPacket*)&packet, capturyRecolorActorAck))
 		return 0;
 
 	return 1;
 }
 
-extern "C" int Captury_updateActorColors(int actorId)
+extern "C" int Captury_updateActorColors(RemoteCaptury* rc, int actorId)
 {
-	if (sock == -1)
+	if (rc->sock == -1)
 		return 0;
 
 	CapturyStopTrackingPacket packet;
@@ -3246,15 +3091,15 @@ extern "C" int Captury_updateActorColors(int actorId)
 	packet.size = sizeof(packet);
 	packet.actor = actorId;
 
-	if (!sendPacket((CapturyRequestPacket*)&packet, capturyRecolorActorAck))
+	if (!rc->sendPacket((CapturyRequestPacket*)&packet, capturyRecolorActorAck))
 		return 0;
 
 	return 1;
 }
 
-extern "C" int Captury_stopTracking(int actorId)
+extern "C" int Captury_stopTracking(RemoteCaptury* rc, int actorId)
 {
-	if (sock == -1)
+	if (rc->sock == -1)
 		return 0;
 
 	CapturyStopTrackingPacket packet;
@@ -3262,15 +3107,15 @@ extern "C" int Captury_stopTracking(int actorId)
 	packet.size = sizeof(packet);
 	packet.actor = actorId;
 
-	if (!sendPacket((CapturyRequestPacket*)&packet, capturyStopTrackingAck))
+	if (!rc->sendPacket((CapturyRequestPacket*)&packet, capturyStopTrackingAck))
 		return 0;
 
 	return 1;
 }
 
-extern "C" int Captury_deleteActor(int actorId)
+extern "C" int Captury_deleteActor(RemoteCaptury* rc, int actorId)
 {
-	if (sock == -1)
+	if (rc->sock == -1)
 		return 0;
 
 	CapturyStopTrackingPacket packet;
@@ -3278,71 +3123,71 @@ extern "C" int Captury_deleteActor(int actorId)
 	packet.size = sizeof(packet);
 	packet.actor = actorId;
 
-	if (!sendPacket((CapturyRequestPacket*)&packet, capturyDeleteActorAck))
+	if (!rc->sendPacket((CapturyRequestPacket*)&packet, capturyDeleteActorAck))
 		return 0;
 
 	return 1;
 }
 
-extern "C" int Captury_getBackgroundQuality()
+extern "C" int Captury_getBackgroundQuality(RemoteCaptury* rc)
 {
-	if (sock == -1)
+	if (rc->sock == -1)
 		return -1;
 
 	CapturyRequestPacket packet;
 	packet.type = capturyGetBackgroundQuality;
 	packet.size = sizeof(packet);
 
-	if (!sendPacket((CapturyRequestPacket*)&packet, capturyBackgroundQuality))
+	if (!rc->sendPacket((CapturyRequestPacket*)&packet, capturyBackgroundQuality))
 		return -1;
 
-	return backgroundQuality;
+	return rc->backgroundQuality;
 }
 
-extern "C" int Captury_captureBackground(CapturyBackgroundFinishedCallback callback, void* userData)
+extern "C" int Captury_captureBackground(RemoteCaptury* rc, CapturyBackgroundFinishedCallback callback, void* userData)
 {
-	if (sock == -1)
+	if (rc->sock == -1)
 		return 0;
 
 	CapturyRequestPacket packet;
 	packet.type = capturyCaptureBackground;
 	packet.size = sizeof(packet);
 
-	backgroundFinishedCallback = callback;
-	backgroundFinishedCallbackUserData = userData;
+	rc->backgroundFinishedCallback = callback;
+	rc->backgroundFinishedCallbackUserData = userData;
 
-	if (!sendPacket((CapturyRequestPacket*)&packet, capturyCaptureBackgroundAck))
+	if (!rc->sendPacket((CapturyRequestPacket*)&packet, capturyCaptureBackgroundAck))
 		return 0;
 
 	return 1;
 }
 
-extern "C" const char* Captury_getStatus()
+extern "C" const char* Captury_getStatus(RemoteCaptury* rc)
 {
-	if (sock == -1)
+	if (rc->sock == -1)
 		return 0;
 
 	CapturyRequestPacket packet;
 	packet.type = capturyGetStatus;
 	packet.size = sizeof(packet);
 
-	if (!sendPacket((CapturyRequestPacket*)&packet, capturyStatus))
+	if (!rc->sendPacket((CapturyRequestPacket*)&packet, capturyStatus))
 		return 0;
 
-	return lastStatusMessage.c_str();
+	return rc->lastStatusMessage.c_str();
 }
 
-extern "C" int Captury_getCurrentLatency(CapturyLatencyInfo* latencyInfo)
+extern "C" int Captury_getCurrentLatency(RemoteCaptury* rc, CapturyLatencyInfo* latencyInfo)
 {
 	if (latencyInfo == nullptr)
 		return 0;
 
-	latencyInfo->firstImagePacketTime = currentLatency.firstImagePacket;
-	latencyInfo->optimizationStartTime = currentLatency.optimizationStart;
-	latencyInfo->optimizationEndTime = currentLatency.optimizationEnd;
-	latencyInfo->poseSentTime = currentLatency.sendPacketTime;
-	latencyInfo->poseReceivedTime = receivedPoseTime;
-	latencyInfo->timestampOfCorrespondingPose = receivedPoseTimestamp;
+	latencyInfo->firstImagePacketTime = rc->currentLatency.firstImagePacket;
+	latencyInfo->optimizationStartTime = rc->currentLatency.optimizationStart;
+	latencyInfo->optimizationEndTime = rc->currentLatency.optimizationEnd;
+	latencyInfo->poseSentTime = rc->currentLatency.sendPacketTime;
+	latencyInfo->poseReceivedTime = rc->receivedPoseTime;
+	latencyInfo->timestampOfCorrespondingPose = rc->receivedPoseTimestamp;
 
 	return 1;
 }
