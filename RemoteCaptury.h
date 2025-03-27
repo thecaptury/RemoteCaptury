@@ -156,6 +156,9 @@ CAPTURY_DLL_EXPORT CapturyPose* Captury_getCurrentPoseAndTrackingConsistency(int
 // *numAngles = number of angles returned
 CAPTURY_DLL_EXPORT CapturyAngleData* Captury_getCurrentAngles(int actorId, int* numAngles);
 
+// return a copy of pose
+CAPTURY_DLL_EXPORT CapturyPose* Captury_clonePose(const CapturyPose* pose);
+
 // simple function for releasing memory of a pose
 CAPTURY_DLL_EXPORT void Captury_freePose(CapturyPose* pose);
 

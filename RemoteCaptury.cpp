@@ -2364,6 +2364,21 @@ extern "C" CapturyPose* Captury_getCurrentPoseAndTrackingConsistency(int actorId
 	return Captury_getCurrentPoseAndTrackingConsistencyForActor(actorId, tc);
 }
 
+CAPTURY_DLL_EXPORT CapturyPose* Captury_clonePose(const CapturyPose* pose)
+{
+	CapturyPose* cloned = (CapturyPose*)malloc(sizeof(CapturyPose) + sizeof(CapturyTransform)*pose->numTransforms + sizeof(float)*pose->numBlendShapes);
+	memcpy(cloned, pose, sizeof(CapturyPose));
+	cloned->transforms = (CapturyTransform*)&pose[1];
+	cloned->blendShapeActivations = (float*)(((CapturyTransform*)&pose[1]) + pose->numTransforms);
+
+	if (pose->numTransforms != 0)
+		memcpy(cloned->transforms, pose->transforms, sizeof(CapturyTransform)*pose->numTransforms);
+	if (pose->numBlendShapes != 0)
+		memcpy(cloned->blendShapeActivations, pose->blendShapeActivations, sizeof(float)*pose->numBlendShapes);
+
+	return cloned;
+}
+
 // simple function for releasing memory of a pose
 extern "C" void Captury_freePose(CapturyPose* pose)
 {
