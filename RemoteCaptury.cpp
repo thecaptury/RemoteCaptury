@@ -312,9 +312,9 @@ struct RemoteCaptury {
 	sockaddr_in	localAddress; // local address
 	sockaddr_in	localStreamAddress; // local address for streaming socket
 	sockaddr_in	remoteAddress; // address of server
-	uint16_t		streamSocketPort = 0;
+	uint16_t	streamSocketPort = 0;
 
-	uint64_t		pingTime;
+	uint64_t	pingTime;
 	int32_t		nextTimeId = 213;
 
 	int					backgroundQuality = -1;
@@ -1598,7 +1598,9 @@ static void* streamLoop(void* arg)
 {
 	RemoteCaptury** rc = (RemoteCaptury**)arg;
 	CapturyStreamPacketTcp* packet = (CapturyStreamPacketTcp*)&rc[1];
-	return rc[0]->streamLoop(packet);
+	rc[0]->streamLoop(packet);
+	free(arg);
+	return 0;
 }
 
 #ifdef WIN32
@@ -1613,21 +1615,18 @@ void* RemoteCaptury::streamLoop(CapturyStreamPacketTcp* packet)
 	SOCKET streamSock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 	if (streamSock == -1) {
 		log("failed to create stream socket\n");
-		free(packet);
 		return 0;
 	}
 
 	if (bind(streamSock, (sockaddr*) &localStreamAddress, sizeof(localStreamAddress)) != 0) {
 		closesocket(streamSock);
 		log("failed to bind stream socket\n");
-		free(packet);
 		return 0;
 	}
 
 	if (::connect(streamSock, (sockaddr*) &remoteAddress, sizeof(remoteAddress)) != 0) {
 		closesocket(streamSock);
 		log("failed to connect stream socket\n");
-		free(packet);
 		return 0;
 	}
 
@@ -1990,9 +1989,6 @@ void* RemoteCaptury::streamLoop(CapturyStreamPacketTcp* packet)
 	streamSocketPort = 0;
 
 	log("closing streaming thread\n");
-
-	free(packet);
-
 	return 0;
 }
 
@@ -2087,8 +2083,6 @@ bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short 
 extern "C" int Captury_disconnect(RemoteCaptury* rc)
 {
 	rc->disconnect();
-	delete rc;
-
 	return 1;
 }
 
