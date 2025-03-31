@@ -1223,9 +1223,10 @@ bool RemoteCaptury::receive(SOCKET& sok)
 				//log("received fulll actor %d\n", actor->id);
 				lockMutex(&mutex);
 				actorsById[actor->id] = actor;
+				CapturyActorStatus status = actorData[actor->id].status;
 				unlockMutex(&mutex);
 				if (actorChangedCallback)
-					actorChangedCallback(this, actor->id, actorData[actor->id].status, actorChangedArg);
+					actorChangedCallback(this, actor->id, status, actorChangedArg);
 			} else {
 				lockMutex(&partialActorMutex);
 				partialActors[actor->id] = actor;
@@ -1298,9 +1299,10 @@ bool RemoteCaptury::receive(SOCKET& sok)
 				// log("received fulll actor %d\n", actor->id);
 				lockMutex(&mutex);
 				actorsById[actor->id] = actor;
+				CapturyActorStatus status = actorData[actor->id].status;
 				unlockMutex(&mutex);
 				if (actorChangedCallback)
-					actorChangedCallback(this, actor->id, actorData[actor->id].status, actorChangedArg);
+					actorChangedCallback(this, actor->id, status, actorChangedArg);
 				lockMutex(&partialActorMutex);
 				partialActors.erase(actor->id);
 				unlockMutex(&partialActorMutex);
