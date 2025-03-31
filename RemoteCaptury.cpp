@@ -2962,7 +2962,7 @@ static void decompose(const float* mat, float* euler) // checked
 // 	log("%.4f %.4f %.4f  %.4f\n", mat[12], mat[13], mat[14], mat[15]);
 // }
 
-void Captury_convertPoseToLocal(RemoteCaptury* rc, CapturyPose* pose, int actorId) REQUIRES(mutex)
+void Captury_convertPoseToLocal(RemoteCaptury* rc, CapturyPose* pose, int actorId) REQUIRES(rc->mutex)
 {
 	if (rc->actorsById.count(actorId) == 0)
 		return;
