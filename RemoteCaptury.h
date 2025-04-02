@@ -3,6 +3,9 @@
 #include <stdint.h>
 #include "captury/PublicStructs.h"
 
+#pragma warning( push )
+#pragma warning( disable : 4200 ) // nonstandard extension used: zero-sized array in struct/union
+
 #ifdef WIN32
 #define CAPTURY_DLL_EXPORT __declspec(dllexport)
 #else

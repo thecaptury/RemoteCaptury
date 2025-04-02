@@ -17,13 +17,21 @@
 
 #include <stdlib.h>
 #include <stdio.h>
+
+#pragma warning( push )
+#pragma warning( disable : 4100 ) // 'identifier' : unreferenced formal parameter
+#pragma warning( disable : 4200 ) // nonstandard extension used: zero-sized array in struct/union
+#pragma warning( disable : 4245 ) // 'conversion' : conversion from 'type1' to 'type2', signed/unsigned mismatch
+#pragma warning( disable : 4267 ) // 'var' : conversion from 'size_t' to 'type', possible loss of data
+#pragma warning( disable : 4996 ) // don't show "deprecated" warnings
+
 // #define MAXIMUM(a, b) ((a) > (b) ? (a) : (b))
 #ifdef WIN32
 #undef max
 #undef min
-#pragma warning(disable : 4200)
-#pragma warning(disable : 4996)
-#define _CRT_SECURE_NO_WARNINGS
+#ifndef _CRT_SECURE_NO_WARNINGS
+	#define _CRT_SECURE_NO_WARNINGS
+#endif
 #define _WIN32_WINNT_WINTHRESHOLD 0
 #define _APISET_RTLSUPPORT_VER 0
 #define _APISET_INTERLOCKED_VER 0
@@ -1725,7 +1733,7 @@ void* RemoteCaptury::streamLoop(CapturyStreamPacketTcp* packet)
 				continue;
 			}
 			char buff[200];
-			sprintf(buff, "Stream socket error: %s", sockstrerror(err));
+			snprintf(buff, 200, "Stream socket error: %s", sockstrerror(err));
 			lastErrorMessage = buff;
 			log("streaming error: %s\n", buff);
 			break;
@@ -2060,7 +2068,7 @@ bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short 
 #ifdef WIN32
 			if (!wsaInited) {
 				WSADATA init;
-				const int ret = WSAStartup(WINSOCK_VERSION, &init);
+				WSAStartup(WINSOCK_VERSION, &init);
 				wsaInited = true;
 			}
 #endif
