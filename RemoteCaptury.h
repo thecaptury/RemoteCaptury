@@ -130,6 +130,7 @@ CAPTURY_DLL_EXPORT int Captury_getCameras(RemoteCaptury* rc, const CapturyCamera
 #define CAPTURY_STREAM_SCALES		0x0400
 #define CAPTURY_STREAM_BLENDSHAPES	0x0800
 #define CAPTURY_STREAM_TCP		0x1000
+#define CAPTURY_STREAM_ONLY_ROOT_TRANSLATION	0x2000
 
 // returns 1 if successful, 0 otherwise
 CAPTURY_DLL_EXPORT int Captury_startStreaming(RemoteCaptury* rc, int what);

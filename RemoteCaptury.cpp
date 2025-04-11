@@ -133,8 +133,9 @@ struct ActorData {
 	CapturyPose		currentPose;
 	struct InProgress {
 		float*			pose;
-		int			bytesDone;
 		uint64_t		timestamp;
+		int			bytesDone;
+		bool			onlyRootTranslation;
 	};
 	InProgress		inProgress[4];
 	// actor id -> timestamp
@@ -922,14 +923,34 @@ void RemoteCaptury::receivedPosePacket(CapturyPosePacket* cpp)
 	}
 
 	CapturyActor* actor = actorsById[cpp->actor].get();
-	int numTransforms = std::min<int>(numValues / 6, actor->numJoints);
-	int numBlendShapes = std::min<int>(numValues - numTransforms*6, actor->numBlendShapes);
+	bool onlyRootTranslation;
+	int numTransforms, numTransformValues;
+	int numBlendShapes;
+	int expectedNumValues;
+	if (numValues < 0) {
+		onlyRootTranslation = true;
+		numValues = -numValues;
+		numTransforms = std::min<int>((numValues - 3) / 3, actor->numJoints);
+		numTransformValues = numTransforms*3 + 3;
+		numBlendShapes = std::min<int>(numValues - numTransformValues, actor->numBlendShapes);
+		expectedNumValues = 3 + actor->numJoints * 3 + actor->numBlendShapes;
+	} else {
+		onlyRootTranslation = false;
+		numTransforms = std::min<int>(numValues / 6, actor->numJoints);
+		numTransformValues = numTransforms*6;
+		numBlendShapes = std::min<int>(numValues - numTransformValues, actor->numBlendShapes);
+		expectedNumValues = actor->numJoints * 6 + actor->numBlendShapes;
+	}
 
-	if (actorsById.count(cpp->actor) != 0 && actor->numJoints * 6 + actor->numBlendShapes != numValues) {
-		if (actor->numJoints * 6 == numValues)
+	if (actorsById.count(cpp->actor) != 0 && expectedNumValues != numValues) {
+		if ((onlyRootTranslation && actor->numJoints * 3 + 3 == numValues) ||
+		    (!onlyRootTranslation && actor->numJoints * 6 == numValues))
 			numBlendShapes = 0;
 		else {
-			log("expected %d+%d dofs, got %d\n", actor->numJoints * 6, actor->numBlendShapes, numValues);
+			if (onlyRootTranslation)
+				log("expected 3+%d+%d dofs, got %d\n", actor->numJoints*3, actor->numBlendShapes, numValues);
+			else
+				log("expected %d+%d dofs, got %d\n", actor->numJoints*6, actor->numBlendShapes, numValues);
 			unlockMutex(&mutex);
 			return;
 		}
@@ -964,11 +985,19 @@ void RemoteCaptury::receivedPosePacket(CapturyPosePacket* cpp)
 	// either copy to currentPose or inProgress pose
 	int numBytesToCopy = cpp->size - at;
 	bool done = false;
-	if ((cpp->type == capturyPose || cpp->type == capturyPose2) && numBytesToCopy == (int)((numTransforms*6 + numBlendShapes)*sizeof(float))) {
-		if (numTransforms != 0)
-			memcpy(it->second.currentPose.transforms, values, numTransforms*6*sizeof(float));
+	if ((cpp->type == capturyPose || cpp->type == capturyPose2) && numBytesToCopy == (int)((numTransformValues + numBlendShapes)*sizeof(float))) {
+		if (numTransforms != 0) {
+			if (onlyRootTranslation) {
+				if (numTransformValues >= 6) {
+					memcpy(it->second.currentPose.transforms, values, 6*sizeof(float));
+					for (int i = 1, at = 6; at < numTransformValues; ++i, at += 3)
+						memcpy(it->second.currentPose.transforms[i].rotation, values+at, 3*sizeof(float));
+				}
+			} else
+				memcpy(it->second.currentPose.transforms, values, numTransformValues*sizeof(float));
+		}
 		if (numBlendShapes != 0)
-			memcpy(it->second.currentPose.blendShapeActivations, values + numTransforms*6, numBlendShapes*sizeof(float));
+			memcpy(it->second.currentPose.blendShapeActivations, values + numTransformValues, numBlendShapes*sizeof(float));
 		done = true;
 	} else if ((cpp->type == capturyCompressedPose || cpp->type == capturyCompressedPose2) && numBytesToCopy == (numTransforms-1)*10 + 13 + numBlendShapes * 2) {
 		decompressPose(&it->second.currentPose, (uint8_t*)values, actor);
@@ -979,6 +1008,7 @@ void RemoteCaptury::receivedPosePacket(CapturyPosePacket* cpp)
 		memcpy(it->second.inProgress[inProgressIndex].pose, values, numBytesToCopy);
 		it->second.inProgress[inProgressIndex].bytesDone = numBytesToCopy;
 		it->second.inProgress[inProgressIndex].timestamp = cpp->timestamp;
+		it->second.inProgress[inProgressIndex].onlyRootTranslation = onlyRootTranslation;
 	}
 
 	if (done)
@@ -1958,7 +1988,12 @@ void* RemoteCaptury::streamLoop(CapturyStreamPacketTcp* packet)
 			if (aData.inProgress[inProgressIndex].bytesDone == totalBytes) {
 				if (cpp->type == capturyCompressedPoseCont)
 					decompressPose(&aData.currentPose, (uint8_t*)aData.inProgress[inProgressIndex].pose, actorsById[cpp->actor].get());
-				else {
+				else if (aData.inProgress[inProgressIndex].onlyRootTranslation) {
+					memcpy(aData.currentPose.transforms, aData.inProgress[inProgressIndex].pose, numJoints * 6 * sizeof(float));
+					for (int i = 1, at = 6; i < numJoints; ++i, at += 3)
+						memcpy(it->second.currentPose.transforms[i].rotation, aData.inProgress[inProgressIndex].pose+at, 3*sizeof(float));
+					memcpy(aData.currentPose.blendShapeActivations, aData.inProgress[inProgressIndex].pose + (3 + numJoints * 3) * sizeof(float), numBlendShapes * sizeof(float));
+				} else {
 					memcpy(aData.currentPose.transforms, aData.inProgress[inProgressIndex].pose, numJoints * 6 * sizeof(float));
 					memcpy(aData.currentPose.blendShapeActivations, aData.inProgress[inProgressIndex].pose + numJoints * 6 * sizeof(float), numBlendShapes * sizeof(float));
 				}
