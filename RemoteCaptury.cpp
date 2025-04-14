@@ -964,9 +964,17 @@ void RemoteCaptury::receivedPosePacket(CapturyPosePacket* cpp)
 	// either copy to currentPose or inProgress pose
 	int numBytesToCopy = cpp->size - at;
 	bool done = false;
-	if ((cpp->type == capturyPose || cpp->type == capturyPose2) && numBytesToCopy == (int)((numTransforms*6 + numBlendShapes)*sizeof(float))) {
-		if (numTransforms != 0)
-			memcpy(it->second.currentPose.transforms, values, numTransforms*6*sizeof(float));
+	if ((cpp->type == capturyPose || cpp->type == capturyPose2) && numBytesToCopy == (int)((numTransformValues + numBlendShapes)*sizeof(float))) {
+		if (numTransforms != 0) {
+			if (onlyRootTranslation) {
+				if (numTransformValues >= 6) {
+					memcpy(it->second.currentPose.transforms, values, 6*sizeof(float));
+					for (int i = 1, n = 6; n < numTransformValues; ++i, n += 3)
+						memcpy(it->second.currentPose.transforms[i].rotation, values+n, 3*sizeof(float));
+				}
+			} else
+				memcpy(it->second.currentPose.transforms, values, numTransformValues*sizeof(float));
+		}
 		if (numBlendShapes != 0)
 			memcpy(it->second.currentPose.blendShapeActivations, values + numTransforms*6, numBlendShapes*sizeof(float));
 		done = true;
@@ -1958,7 +1966,12 @@ void* RemoteCaptury::streamLoop(CapturyStreamPacketTcp* packet)
 			if (aData.inProgress[inProgressIndex].bytesDone == totalBytes) {
 				if (cpp->type == capturyCompressedPoseCont)
 					decompressPose(&aData.currentPose, (uint8_t*)aData.inProgress[inProgressIndex].pose, actorsById[cpp->actor].get());
-				else {
+				else if (aData.inProgress[inProgressIndex].onlyRootTranslation) {
+					memcpy(aData.currentPose.transforms, aData.inProgress[inProgressIndex].pose, numJoints * 6 * sizeof(float));
+					for (int i = 1, n = 6; i < numJoints; ++i, n += 3)
+						memcpy(it->second.currentPose.transforms[i].rotation, aData.inProgress[inProgressIndex].pose+n, 3*sizeof(float));
+					memcpy(aData.currentPose.blendShapeActivations, aData.inProgress[inProgressIndex].pose + (3 + numJoints * 3) * sizeof(float), numBlendShapes * sizeof(float));
+				} else {
 					memcpy(aData.currentPose.transforms, aData.inProgress[inProgressIndex].pose, numJoints * 6 * sizeof(float));
 					memcpy(aData.currentPose.blendShapeActivations, aData.inProgress[inProgressIndex].pose + numJoints * 6 * sizeof(float), numBlendShapes * sizeof(float));
 				}
