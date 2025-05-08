@@ -618,6 +618,8 @@ const char* Captury_getHumanReadableMessageType(CapturyPacketTypes type)
 		return "<framerate>";
 	case CapturyBoneTypes:
 		return "<bone types>";
+	case capturyActorMetaData:
+		return "<actor meta data>";
 	}
 	return "<unknown message type>";
 }
@@ -1362,6 +1364,21 @@ bool RemoteCaptury::receive(SOCKET& sok)
 				strncpy(actor->blendShapes[i].name, at, 63);
 				actor->blendShapes[i].name[63] = '\0';
 				at += std::min<int>((int)strlen(actor->blendShapes[i].name) + 1, 64);
+			}
+			unlockMutex(&mutex);
+			break; }
+		case capturyActorMetaData: {
+			CapturyActorMetaDataPacket* cmd = (CapturyActorMetaDataPacket*)p;
+			lockMutex(&mutex);
+			CapturyActor_p actor = actorsById[cmd->actorId];
+			actor->numMetaData = cmd->numMetaData;
+			actor->metaDataKeys = new char*[actor->numMetaData];
+			actor->metaDataValues = new char*[actor->numMetaData];
+			for (int i = 0; i < actor->numMetaData; ++i) { // from a memory allocation perspective this is pretty inefficient
+				actor->metaDataKeys[i] = strdup(at);
+				at += strlen(actor->metaDataKeys[i]) + 1;
+				actor->metaDataValues[i] = strdup(at);
+				at += strlen(actor->metaDataValues[i]) + 1;
 			}
 			unlockMutex(&mutex);
 			break; }
