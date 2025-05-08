@@ -616,7 +616,7 @@ const char* Captury_getHumanReadableMessageType(CapturyPacketTypes type)
 		return "<get framerate>";
 	case capturyFramerate:
 		return "<framerate>";
-	case CapturyBoneTypes:
+	case capturyBoneTypes:
 		return "<bone types>";
 	case capturyActorMetaData:
 		return "<actor meta data>";
@@ -1371,9 +1371,10 @@ bool RemoteCaptury::receive(SOCKET& sok)
 			CapturyActorMetaDataPacket* cmd = (CapturyActorMetaDataPacket*)p;
 			lockMutex(&mutex);
 			CapturyActor_p actor = actorsById[cmd->actorId];
-			actor->numMetaData = cmd->numMetaData;
+			actor->numMetaData = cmd->numEntries;
 			actor->metaDataKeys = new char*[actor->numMetaData];
 			actor->metaDataValues = new char*[actor->numMetaData];
+			char* at = cmd->metaData;
 			for (int i = 0; i < actor->numMetaData; ++i) { // from a memory allocation perspective this is pretty inefficient
 				actor->metaDataKeys[i] = strdup(at);
 				at += strlen(actor->metaDataKeys[i]) + 1;
@@ -1382,7 +1383,7 @@ bool RemoteCaptury::receive(SOCKET& sok)
 			}
 			unlockMutex(&mutex);
 			break; }
-		case CapturyBoneTypes: {
+		case capturyBoneTypes: {
 			CapturyBoneTypePacket* cbt = (CapturyBoneTypePacket*)p;
 			lockMutex(&mutex);
 			CapturyActor_p actor = actorsById[cbt->actorId];

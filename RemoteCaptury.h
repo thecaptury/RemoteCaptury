@@ -407,8 +407,8 @@ typedef enum { capturyActors = 1, capturyActor = 2,
 	       capturyDisableRemoteLogging = 77,
 	       capturyGetFramerate = 78,
 	       capturyFramerate = 79,
-	       CapturyBoneTypes = 80,
-	       CapturyActorMetaData = 81,
+	       capturyBoneTypes = 80,
+	       capturyActorMetaData = 81,
 	       capturyError = 0 } CapturyPacketTypes;
 
 // returns a string for nicer error messages
