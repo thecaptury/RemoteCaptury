@@ -408,6 +408,7 @@ typedef enum { capturyActors = 1, capturyActor = 2,
 	       capturyGetFramerate = 78,
 	       capturyFramerate = 79,
 	       CapturyBoneTypes = 80,
+	       CapturyActorMetaData = 81,
 	       capturyError = 0 } CapturyPacketTypes;
 
 // returns a string for nicer error messages
@@ -480,6 +481,17 @@ struct CapturyActorBlendShapesPacket {
 	int32_t		actorId;
 	int32_t		numBlendShapes;
 	char		blendShapeNames[];
+};
+
+// sent to client
+// as a reply to CapturyRequestPacket = capturyActors
+struct CapturyActorMetaDataPacket {
+	int32_t		type;		// capturyActorMetaData
+	int32_t		size;		// size of full message including type and size
+
+	int32_t		actorId;
+	int32_t		numEntries;
+	char		metaData[];	// 2*numEntries zero-terminated strings key, value ...
 };
 
 // sent to client

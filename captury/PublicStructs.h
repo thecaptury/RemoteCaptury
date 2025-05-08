@@ -109,6 +109,9 @@ struct CapturyActor {
 	CapturyBlob*	blobs;
 	int32_t		numBlendShapes;
 	CapturyBlendShape* blendShapes;
+	int32_t		numMetaData;
+	char**		metaDataKeys;	// metaDataKeys[i] -> metaDataValues[i]
+	char**		metaDataValues;
 };
 
 struct CapturyTransform {
