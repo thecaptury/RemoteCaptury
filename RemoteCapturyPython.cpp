@@ -1,12 +1,16 @@
 #include <Python.h>
 #include "RemoteCaptury.h"
 
+static RemoteCaptury* rc = nullptr;
+
 static PyObject* connect(PyObject *self, PyObject *args)
 {
 	const char* host;
 	int port = 2101;
 	if (PyArg_ParseTuple(args, "s|i:connect", &host, &port)) {
-		if (Captury_connect(host, port))
+		if (rc == nullptr)
+			rc = Captury_create();
+		if (Captury_connect(rc, host, port))
 			Py_RETURN_TRUE;
 	}
 	Py_RETURN_FALSE;
@@ -25,7 +29,7 @@ static PyObject* startStreamingImages(PyObject *self, PyObject *args, PyObject* 
 	// todo : check numberNumber is in range of available cameras.
 	// the method captury_startStreamingImages accepts int cameraNumber, that number is what ? 0 to totalCameras-1 ?
 
-	if (Captury_startStreamingImages(what, cameraNumber))
+	if (Captury_startStreamingImages(rc, what, cameraNumber))
 		Py_RETURN_TRUE;
 	Py_RETURN_FALSE;
 }
@@ -40,38 +44,38 @@ static PyObject* startStreaming(PyObject *self, PyObject *args, PyObject* kwargs
 		Py_RETURN_FALSE;
 	}
 
-	// todo : check numberNumber is in range of available cameras.
+	// TODO: check cameraNumber is in range of available cameras.
 
-	if (Captury_startStreaming(what))
+	if (Captury_startStreaming(rc, what))
 		Py_RETURN_TRUE;
 	Py_RETURN_FALSE;
 }
 
 static PyObject* stopStreaming(PyObject *self, PyObject *args)
 {
-	if (Captury_stopStreaming())
+	if (Captury_stopStreaming(rc))
 		Py_RETURN_TRUE;
 	Py_RETURN_FALSE;
 }
 
 static PyObject* synchronizeTime(PyObject *self, PyObject *args)
 {
-	return PyLong_FromLong(Captury_synchronizeTime());
+	return PyLong_FromLong(Captury_synchronizeTime(rc));
 }
 
 static PyObject* startSyncLoop(PyObject *self, PyObject *args)
 {
-	Captury_startTimeSynchronizationLoop();
+	Captury_startTimeSynchronizationLoop(rc);
 	Py_RETURN_NONE;
 }
 static PyObject* getTime(PyObject *self, PyObject *args)
 {
-	return PyLong_FromLong(Captury_getTime());
+	return PyLong_FromLong(Captury_getTime(rc));
 }
 
 static PyObject* getTimeOffset(PyObject *self, PyObject *args)
 {
-	return PyLong_FromLong(Captury_getTimeOffset());
+	return PyLong_FromLong(Captury_getTimeOffset(rc));
 }
 
 static PyObject* snapActor(PyObject *self, PyObject *args)
@@ -79,7 +83,7 @@ static PyObject* snapActor(PyObject *self, PyObject *args)
 	float x, y;
 	float heading = 370;
 	if (PyArg_ParseTuple(args, "ff|f:snapActor", &x, &y, &heading)) {
-		if (Captury_snapActor(x, y, heading))
+		if (Captury_snapActor(rc, x, y, heading))
 			Py_RETURN_TRUE;
 	}
 	Py_RETURN_FALSE;
@@ -87,14 +91,14 @@ static PyObject* snapActor(PyObject *self, PyObject *args)
 
 static PyObject* startRecording(PyObject *self, PyObject *args)
 {
-	if (Captury_startRecording())
+	if (Captury_startRecording(rc))
 		Py_RETURN_TRUE;
 	Py_RETURN_FALSE;
 }
 
 static PyObject* stopRecording(PyObject *self, PyObject *args)
 {
-	if (Captury_stopRecording())
+	if (Captury_stopRecording(rc))
 		Py_RETURN_TRUE;
 	Py_RETURN_FALSE;
 }
@@ -103,7 +107,7 @@ static PyObject* setShotName(PyObject *self, PyObject *args)
 {
 	const char* name;
 	if (PyArg_ParseTuple(args, "s:setShotName", &name)) {
-		if (Captury_setShotName(name))
+		if (Captury_setShotName(rc, name))
 			Py_RETURN_TRUE;
 	}
 	Py_RETURN_FALSE;
