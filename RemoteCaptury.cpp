@@ -2165,8 +2165,25 @@ bool RemoteCaptury::disconnect()
 			wsaInited = false;
 		}
 
-		WaitForSingleObject(receiveThread, 1000);
-		WaitForSingleObject(streamThread, 1000);
+		DWORD waitReceiveRet = WAIT_TIMEOUT;
+		DWORD waitStreamRet = WAIT_TIMEOUT;
+
+		while (waitReceiveRet == WAIT_TIMEOUT) {
+			log("RemoteCaptury::disconnect(): waiting for receiveThread");
+			waitReceiveRet = WaitForSingleObject(receiveThread, 1000);
+		}
+
+		if (waitReceiveRet != WAIT_OBJECT_0)
+			log("RemoteCaptury::disconnect() warning: receiveThread termination failed!");
+
+		while (waitStreamRet == WAIT_TIMEOUT) {
+			log("RemoteCaptury::disconnect(): waiting for streamThread");
+			waitStreamRet = WaitForSingleObject(streamThread, 1000);
+		}
+
+		if (waitStreamRet != WAIT_OBJECT_0)
+			log("RemoteCaptury:disconnect() warning: streamThread termination failed!");
+
 		#else
 		void* retVal;
 		pthread_join(receiveThread, &retVal);
