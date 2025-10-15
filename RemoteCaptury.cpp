@@ -2160,10 +2160,6 @@ bool RemoteCaptury::disconnect()
 		stopStreamThread = 1;
 
 		#ifdef WIN32
-		if (wsaInited) {
-			WSACleanup();
-			wsaInited = false;
-		}
 
 		DWORD waitReceiveRet = WAIT_TIMEOUT;
 		DWORD waitStreamRet = WAIT_TIMEOUT;
@@ -2183,6 +2179,12 @@ bool RemoteCaptury::disconnect()
 
 		if (waitStreamRet != WAIT_OBJECT_0)
 			log("RemoteCaptury:disconnect() warning: streamThread termination failed!");
+
+		if (wsaInited) {
+			WSACleanup();
+			wsaInited = false;
+		}
+
 
 		#else
 		void* retVal;
