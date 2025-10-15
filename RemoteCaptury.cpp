@@ -2164,17 +2164,25 @@ bool RemoteCaptury::disconnect()
 		DWORD waitReceiveRet = WAIT_TIMEOUT;
 		DWORD waitStreamRet = WAIT_TIMEOUT;
 
-		while (waitReceiveRet == WAIT_TIMEOUT) {
+		int counter = 0;
+
+		while (waitReceiveRet == WAIT_TIMEOUT && counter < 10) {
 			log("RemoteCaptury::disconnect(): waiting for receiveThread");
 			waitReceiveRet = WaitForSingleObject(receiveThread, 1000);
+
+			counter++;
 		}
 
 		if (waitReceiveRet != WAIT_OBJECT_0)
 			log("RemoteCaptury::disconnect() warning: receiveThread termination failed!");
 
-		while (waitStreamRet == WAIT_TIMEOUT) {
+		counter = 0;
+
+		while (waitStreamRet == WAIT_TIMEOUT && counter < 10) {
 			log("RemoteCaptury::disconnect(): waiting for streamThread");
 			waitStreamRet = WaitForSingleObject(streamThread, 1000);
+
+			counter++;
 		}
 
 		if (waitStreamRet != WAIT_OBJECT_0)
