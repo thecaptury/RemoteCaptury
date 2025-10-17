@@ -39,6 +39,7 @@
 #define NTDDI_WIN7SP1 0
 #define snprintf _snprintf
 #include <winsock2.h>
+#include <ws2tcpip.h>
 #include <sysinfoapi.h>
 #pragma comment(lib, "ws2_32.lib")
 #ifndef PRIu64
@@ -910,6 +911,11 @@ void RemoteCaptury::receivedPosePacket(CapturyPosePacket* cpp)
 		return;
 	}
 
+	// if (cpp->type == capturyPose)
+	// 	log("received pose %s %x: %d values: %g (%d bytes)\n", Captury_getHumanReadableMessageType((CapturyPacketTypes)cpp->type), cpp->actor, cpp->numValues, cpp->values[0], cpp->size);
+	// else if (cpp->type == capturyPose2)
+	// 	log("received pose %s %x: %d values: %g %g %g (%d bytes)\n", Captury_getHumanReadableMessageType((CapturyPacketTypes)cpp->type), cpp->actor, ((CapturyPosePacket2*)cpp)->numValues, ((CapturyPosePacket2*)cpp)->values[6], ((CapturyPosePacket2*)cpp)->values[7], ((CapturyPosePacket2*)cpp)->values[8], cpp->size);
+
 	int numValues;
 	float* values;
 	int at;
@@ -943,6 +949,8 @@ void RemoteCaptury::receivedPosePacket(CapturyPosePacket* cpp)
 		numBlendShapes = std::min<int>(numValues - numTransformValues, actor->numBlendShapes);
 		expectedNumValues = actor->numJoints * 6 + actor->numBlendShapes;
 	}
+
+	//log("%svalues %d, trafos %d, blendshapes %d, expected %d\n", onlyRootTranslation ? "onlyRoot" : "", numValues, numTransforms, numBlendShapes, expectedNumValues);
 
 	if (actorsById.count(cpp->actor) != 0 && expectedNumValues != numValues) {
 		if ((onlyRootTranslation && actor->numJoints * 3 + 3 == numValues) ||
@@ -992,8 +1000,10 @@ void RemoteCaptury::receivedPosePacket(CapturyPosePacket* cpp)
 			if (onlyRootTranslation) {
 				if (numTransformValues >= 6) {
 					memcpy(it->second.currentPose.transforms, values, 6*sizeof(float));
-					for (int i = 1, n = 6; n < numTransformValues; ++i, n += 3)
+					for (int i = 1, n = 6; n < numTransformValues; ++i, n += 3) {
 						memcpy(it->second.currentPose.transforms[i].rotation, values+n, 3*sizeof(float));
+						memset(it->second.currentPose.transforms[i].translation, 0, 3*sizeof(float));
+					}
 				}
 			} else
 				memcpy(it->second.currentPose.transforms, values, numTransformValues*sizeof(float));
@@ -1033,6 +1043,8 @@ SOCKET RemoteCaptury::openTcpSocket()
 	}
 
 	if (::connect(sok, (sockaddr*) &remoteAddress, sizeof(remoteAddress)) != 0) {
+		char buf[100];
+		log("failed to connect to %s:%d: %s\n", inet_ntop(AF_INET, &remoteAddress.sin_addr, buf, 100), ntohs(remoteAddress.sin_port), sockstrerror());
 		closesocket(sok);
 		return (SOCKET)-1;
 	}
@@ -1040,10 +1052,8 @@ SOCKET RemoteCaptury::openTcpSocket()
 	// set read timeout
 	setSocketTimeout(sok, 500);
 
-#ifndef WIN32
 	char buf[100];
 	log("connected to %s:%d\n", inet_ntop(AF_INET, &remoteAddress.sin_addr, buf, 100), ntohs(remoteAddress.sin_port));
-#endif
 
 	return sok;
 }
@@ -1157,7 +1167,7 @@ bool RemoteCaptury::receive(SOCKET& sok)
 			size = std::min<int>(p->size, (int)buffer.size());
 		}
 
-		// log("received packet size %d type %d (expected %d)\n", size, p->type, expect);
+		log("received packet size %d type %d %s\n", size, p->type, Captury_getHumanReadableMessageType((CapturyPacketTypes)p->type));
 
 		switch (p->type) {
 		case capturyHello:
