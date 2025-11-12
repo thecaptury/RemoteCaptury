@@ -66,15 +66,22 @@ typedef uint32_t uint;
 
 #if defined(__clang__) && (!defined(SWIG))
 #define THREAD_ANNOTATION_ATTRIBUTE__(x)   __attribute__((x))
-#else
-#define THREAD_ANNOTATION_ATTRIBUTE__(x)   // no-op
+#elif _MSC_VER
+  #define THREAD_ANNOTATION_ATTRIBUTE__(x)   // no-op
+  #define CAPABILITY(x)		
+  #define GUARDED_BY(x)		_Guarded_by_(x)
+  #define REQUIRES(...)		_Requires_lock_held_(__VA_ARGS__)
+  #define ACQUIRE(...)		_Acquires_lock_(__VA_ARGS__)
+  #define RELEASE(...)		_Releases_lock_(__VA_ARGS__)
 #endif
 
-#define CAPABILITY(x)		THREAD_ANNOTATION_ATTRIBUTE__(capability(x))
-#define GUARDED_BY(x)		THREAD_ANNOTATION_ATTRIBUTE__(guarded_by(x))
-#define REQUIRES(...)		THREAD_ANNOTATION_ATTRIBUTE__(requires_capability(__VA_ARGS__))
-#define ACQUIRE(...)		THREAD_ANNOTATION_ATTRIBUTE__(acquire_capability(__VA_ARGS__))
-#define RELEASE(...)		THREAD_ANNOTATION_ATTRIBUTE__(release_capability(__VA_ARGS__))
+#ifndef RELEASE
+  #define CAPABILITY(x)		THREAD_ANNOTATION_ATTRIBUTE__(capability(x))
+  #define GUARDED_BY(x)		THREAD_ANNOTATION_ATTRIBUTE__(guarded_by(x))
+  #define REQUIRES(...)		THREAD_ANNOTATION_ATTRIBUTE__(requires_capability(__VA_ARGS__))
+  #define ACQUIRE(...)		THREAD_ANNOTATION_ATTRIBUTE__(acquire_capability(__VA_ARGS__))
+  #define RELEASE(...)		THREAD_ANNOTATION_ATTRIBUTE__(release_capability(__VA_ARGS__))
+#endif
 // #pragma clang optimize off
 // #pragma GCC optimize("O0")
 
