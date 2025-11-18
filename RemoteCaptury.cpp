@@ -68,8 +68,9 @@ typedef uint32_t uint;
 #define THREAD_ANNOTATION_ATTRIBUTE__(x)   __attribute__((x))
 #elif _MSC_VER
   #define THREAD_ANNOTATION_ATTRIBUTE__(x)   // no-op
-  #define CAPABILITY(x)		
-  #define GUARDED_BY(x)		_Guarded_by_(x)
+  #define CAPABILITY(x)
+  #define GUARDED_BY(x)
+  #define GUARDED_BY_MSVC(x)	_Guarded_by_(x)
   #define REQUIRES(...)		_Requires_lock_held_(__VA_ARGS__)
   #define ACQUIRE(...)		_Acquires_lock_(__VA_ARGS__)
   #define RELEASE(...)		_Releases_lock_(__VA_ARGS__)
@@ -215,11 +216,11 @@ struct SyncSample {
 };
 
 #ifdef WIN32
-static inline void lockMutex(CRITICAL_SECTION* critsec)
+ACQUIRE(critsec) static inline void lockMutex(CRITICAL_SECTION* critsec)
 {
 	EnterCriticalSection(critsec);
 }
-static inline void unlockMutex(CRITICAL_SECTION* critsec)
+RELEASE(critsec) static inline void unlockMutex(CRITICAL_SECTION* critsec)
 {
 	LeaveCriticalSection(critsec);
 }
@@ -268,11 +269,11 @@ struct RemoteCaptury {
 	std::string currentShot;
 
 	// actor id -> pointer to actor
-	std::unordered_map<int, CapturyActor_p> actorsById GUARDED_BY(mutex);
-	std::unordered_map<const CapturyActor*, CapturyActor_p> returnedActors GUARDED_BY(mutex);
-	std::unordered_map<int, CapturyActor_p> partialActors GUARDED_BY(partialActorMutex); // actors that have been received in part
-	std::vector<CapturyActor> actorPointers GUARDED_BY(mutex); // used by Captury_getActors()
-	std::vector<CapturyActor_p> actorSharedPointers GUARDED_BY(mutex); // used by Captury_getActors()
+	GUARDED_BY_MSVC(mutex) std::unordered_map<int, CapturyActor_p> actorsById GUARDED_BY(mutex);
+	GUARDED_BY_MSVC(mutex) std::unordered_map<const CapturyActor*, CapturyActor_p> returnedActors GUARDED_BY(mutex);
+	GUARDED_BY_MSVC(partialActorMutex) std::unordered_map<int, CapturyActor_p> partialActors GUARDED_BY(partialActorMutex); // actors that have been received in part
+	GUARDED_BY_MSVC(mutex) std::vector<CapturyActor> actorPointers GUARDED_BY(mutex); // used by Captury_getActors()
+	GUARDED_BY_MSVC(mutex) std::vector<CapturyActor_p> actorSharedPointers GUARDED_BY(mutex); // used by Captury_getActors()
 
 	std::unordered_map<int, std::vector<CapturyAngleData>> currentAngles;
 
@@ -290,7 +291,7 @@ struct RemoteCaptury {
 	int framerateNumerator = -1;
 	int framerateDenominator = -1;
 
-	std::unordered_map<int, ActorData> actorData GUARDED_BY(mutex);
+	GUARDED_BY_MSVC(mutex) std::unordered_map<int, ActorData> actorData GUARDED_BY(mutex);
 
 	std::map<int32_t, CapturyImage> currentImages;
 	std::map<int32_t, std::vector<int>> currentImagesReceivedPackets;
@@ -347,10 +348,10 @@ struct RemoteCaptury {
 	std::vector<SyncSample> syncSamples;
 
 
-	Sync oldSync GUARDED_BY(syncMutex) = Sync(0.0, 1.0);
-	Sync currentSync GUARDED_BY(syncMutex) = Sync(0.0, 1.0);
-	uint64_t transitionStartLocalT GUARDED_BY(syncMutex) = 0;
-	uint64_t transitionEndLocalT GUARDED_BY(syncMutex) = 0;
+	GUARDED_BY_MSVC(syncMutex) Sync oldSync GUARDED_BY(syncMutex) = Sync(0.0, 1.0);
+	GUARDED_BY_MSVC(syncMutex) Sync currentSync GUARDED_BY(syncMutex) = Sync(0.0, 1.0);
+	GUARDED_BY_MSVC(syncMutex) uint64_t transitionStartLocalT GUARDED_BY(syncMutex) = 0;
+	GUARDED_BY_MSVC(syncMutex) uint64_t transitionEndLocalT GUARDED_BY(syncMutex) = 0;
 
 	bool sendPacket(CapturyRequestPacket* packet, CapturyPacketTypes expectedReplyType);
 
@@ -2557,8 +2558,8 @@ CAPTURY_DLL_EXPORT CapturyPose* Captury_clonePose(const CapturyPose* pose)
 {
 	CapturyPose* cloned = (CapturyPose*)malloc(sizeof(CapturyPose) + sizeof(CapturyTransform)*pose->numTransforms + sizeof(float)*pose->numBlendShapes);
 	memcpy(cloned, pose, sizeof(CapturyPose));
-	cloned->transforms = (CapturyTransform*)&pose[1];
-	cloned->blendShapeActivations = (float*)(((CapturyTransform*)&pose[1]) + pose->numTransforms);
+	cloned->transforms = (CapturyTransform*)&cloned[1];
+	cloned->blendShapeActivations = (float*)(((CapturyTransform*)&cloned[1]) + pose->numTransforms);
 
 	if (pose->numTransforms != 0)
 		memcpy(cloned->transforms, pose->transforms, sizeof(CapturyTransform)*pose->numTransforms);
