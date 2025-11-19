@@ -64,24 +64,36 @@
 
 typedef uint32_t uint;
 
-#if defined(__clang__) && (!defined(SWIG))
-#define THREAD_ANNOTATION_ATTRIBUTE__(x)   __attribute__((x))
-#elif _MSC_VER
-  #define THREAD_ANNOTATION_ATTRIBUTE__(x)   // no-op
+#ifdef RELEASE
   #define CAPABILITY(x)
   #define GUARDED_BY(x)
-  #define GUARDED_BY_MSVC(x)	_Guarded_by_(x)
-  #define REQUIRES(...)		_Requires_lock_held_(__VA_ARGS__)
-  #define ACQUIRE(...)		_Acquires_lock_(__VA_ARGS__)
-  #define RELEASE(...)		_Releases_lock_(__VA_ARGS__)
-#endif
-
-#ifndef RELEASE
-  #define CAPABILITY(x)		THREAD_ANNOTATION_ATTRIBUTE__(capability(x))
-  #define GUARDED_BY(x)		THREAD_ANNOTATION_ATTRIBUTE__(guarded_by(x))
-  #define REQUIRES(...)		THREAD_ANNOTATION_ATTRIBUTE__(requires_capability(__VA_ARGS__))
-  #define ACQUIRE(...)		THREAD_ANNOTATION_ATTRIBUTE__(acquire_capability(__VA_ARGS__))
-  #define RELEASE(...)		THREAD_ANNOTATION_ATTRIBUTE__(release_capability(__VA_ARGS__))
+  #define GUARDED_BY_MSVC(x)
+  #define REQUIRES(...)
+  #define ACQUIRE(...)
+  #define RELEASE(...)
+#else
+  #if _MSC_VER
+    #define CAPABILITY(x)
+    #define GUARDED_BY(x)
+    #define GUARDED_BY_MSVC(x)	_Guarded_by_(x)
+    #define REQUIRES(...)	_Requires_lock_held_(__VA_ARGS__)
+    #define ACQUIRE(...)	_Acquires_lock_(__VA_ARGS__)
+    #define RELEASE(...)	_Releases_lock_(__VA_ARGS__)
+  #elif defined(__clang__) && !defined(SWIG)
+    #define CAPABILITY(x)	__attribute__((capability((x))))
+    #define GUARDED_BY(x)	__attribute__((guarded_by(x)))
+    #define GUARDED_BY_MSVC(x)
+    #define REQUIRES(...)	__attribute__((requires_capability(__VA_ARGS__)))
+    #define ACQUIRE(...)	__attribute__((acquire_capability(__VA_ARGS__)))
+    #define RELEASE(...)	__attribute__((release_capability(__VA_ARGS__)))
+  #else
+    #define CAPABILITY(x)
+    #define GUARDED_BY(x)
+    #define GUARDED_BY_MSVC(x)
+    #define REQUIRES(...)
+    #define ACQUIRE(...)
+    #define RELEASE(...)
+  #endif
 #endif
 // #pragma clang optimize off
 // #pragma GCC optimize("O0")
@@ -1708,10 +1720,10 @@ void* RemoteCaptury::streamLoop(CapturyStreamPacketTcp* packet)
 
 		ip_mreq mreq;
 		mreq.imr_multiaddr.s_addr = localStreamAddress.sin_addr.s_addr;
-		mreq.imr_interface.s_addr = htonl(INADDR_ANY);
+		mreq.imr_interface.s_addr = INADDR_ANY;
 		if (setsockopt(streamSock, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq)) != 0) {
 			closesocket(streamSock);
-			log("failed to join multicast group\n");
+			log("failed to join multicast group: %s\n", strerror(errno));
 			return 0;
 		}
 	} else {
