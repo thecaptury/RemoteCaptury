@@ -40,6 +40,7 @@
 #define snprintf _snprintf
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <ws2ipdef.h>
 #include <sysinfoapi.h>
 #pragma comment(lib, "ws2_32.lib")
 #ifndef PRIu64
@@ -391,7 +392,7 @@ struct RemoteCaptury {
 	bool receive(SOCKET& sok);
 	void deleteActors();
 
-	bool connect(const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort, int async, in_addr_t multicastAddress);
+	bool connect(const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort, int async, uint32_t multicastAddress);
 	bool disconnect();
 
 	int startStreamingImagesAndAngles(int what, int32_t camId, int numAngles, uint16_t* angles);
@@ -1721,7 +1722,7 @@ void* RemoteCaptury::streamLoop(CapturyStreamPacketTcp* packet)
 		ip_mreq mreq;
 		mreq.imr_multiaddr.s_addr = localStreamAddress.sin_addr.s_addr;
 		mreq.imr_interface.s_addr = INADDR_ANY;
-		if (setsockopt(streamSock, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq)) != 0) {
+		if (setsockopt(streamSock, IPPROTO_IP, IP_ADD_MEMBERSHIP, (const char*)&mreq, sizeof(mreq)) != 0) {
 			closesocket(streamSock);
 			log("failed to join multicast group: %s\n", strerror(errno));
 			return 0;
@@ -2130,7 +2131,7 @@ extern "C" int Captury_connect2(RemoteCaptury* rc, const char* ip, unsigned shor
 	return rc->connect(ip, port, localPort, localStreamPort, async, multicastAddress);
 }
 
-bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort, int async, in_addr_t multicastAddress)
+bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort, int async, uint32_t multicastAddress)
 {
 #ifdef WIN32
 	if (!mutexesInited) {
