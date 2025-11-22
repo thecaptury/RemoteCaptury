@@ -1,0 +1,25 @@
+# Python build artifacts
+*.pyc
+__pycache__/
+*.egg-info/
+dist/
+build/
+*.so
+*.pyd
+
+# Virtual environment
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test outputs
+recording_*.json

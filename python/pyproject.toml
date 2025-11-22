@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "remotecaptury"
+version = "1.0.0"
+description = "Python wrapper for RemoteCaptury - stream motion capture data from CapturyLive"
+readme = "README.md"
+requires-python = ">=3.6"
+license = {text = "See license.txt"}
+authors = [
+    {name = "The Captury", email = "info@thecaptury.com"}
+]
+keywords = ["mocap", "motion-capture", "captury", "streaming"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Multimedia :: Graphics :: Capture",
+    "Topic :: Scientific/Engineering",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.6",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: C++",
+]
+
+[project.urls]
+Homepage = "https://thecaptury.com"
+Documentation = "https://github.com/thecaptury/RemoteCaptury"
+Repository = "https://github.com/thecaptury/RemoteCaptury"
