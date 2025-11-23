@@ -2554,6 +2554,7 @@ CapturyPose* RemoteCaptury::getCurrentPoseAndTrackingConsistencyForActor(int act
 	pose->timestamp = it->second.currentPose.timestamp;
 	pose->numTransforms = it->second.currentPose.numTransforms;
 	pose->transforms = (CapturyTransform*)&pose[1];
+	pose->flags = it->second.currentPose.flags;
 	pose->numBlendShapes = it->second.currentPose.numBlendShapes;
 	pose->blendShapeActivations = (float*)(((CapturyTransform*)&pose[1]) + pose->numTransforms);
 
