@@ -8,7 +8,7 @@ version = "1.0.0"
 description = "Python wrapper for RemoteCaptury - stream motion capture data from CapturyLive"
 readme = "README.md"
 requires-python = ">=3.6"
-license = {text = "See license.txt"}
+license = {text = "Proprietary"}
 authors = [
     {name = "The Captury", email = "info@thecaptury.com"}
 ]

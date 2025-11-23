@@ -1,5 +1,5 @@
 #include <Python.h>
-#include "../../RemoteCaptury.h"
+#include "RemoteCaptury.h"
 #include <iostream>
 #include <vector>
 

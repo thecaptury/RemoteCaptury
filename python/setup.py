@@ -2,16 +2,14 @@ from setuptools import setup, Extension, find_packages
 import os
 
 # Define the extension module
-# We need to access files from the parent directory.
-# Since we are running setup.py from python/, the parent is ../
 sources = [
     'src/bindings.cpp',
-    '../RemoteCaptury.cpp'
+    'src/RemoteCaptury.cpp'
 ]
 
 module1 = Extension('_remotecaptury',
                     sources=sources,
-                    include_dirs=['..'],
+                    include_dirs=['src'],
                     extra_compile_args=['-std=c++11'],
                     )
 

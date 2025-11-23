@@ -1,2 +1,4 @@
-include ../RemoteCaptury.h
-include ../RemoteCaptury.cpp
+include src/RemoteCaptury.h
+include src/RemoteCaptury.cpp
+include src/bindings.cpp
+recursive-include src/captury *.h
