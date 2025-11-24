@@ -1,0 +1,30 @@
+# Python build artifacts
+*.pyc
+__pycache__/
+*.egg-info/
+dist/
+build/
+*.so
+*.pyd
+
+# Virtual environment
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test outputs
+recording_*.json
+
+# Copied source files (duplicates from parent directory)
+src/RemoteCaptury.cpp
+src/RemoteCaptury.h
+src/captury/

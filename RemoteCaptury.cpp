@@ -26,7 +26,7 @@
 #pragma warning( disable : 4996 ) // don't show "deprecated" warnings
 
 // #define MAXIMUM(a, b) ((a) > (b) ? (a) : (b))
-#ifdef WIN32
+#ifdef _WIN32
 #undef max
 #undef min
 #ifndef _CRT_SECURE_NO_WARNINGS
@@ -40,6 +40,7 @@
 #define snprintf _snprintf
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <ws2ipdef.h>
 #include <sysinfoapi.h>
 #pragma comment(lib, "ws2_32.lib")
 #ifndef PRIu64
@@ -98,7 +99,7 @@ typedef uint32_t uint;
 // #pragma clang optimize off
 // #pragma GCC optimize("O0")
 
-#ifdef WIN32
+#ifdef _WIN32
 
 #define socklen_t int
 #define sleepMicroSeconds(us) Sleep(us / 1000)
@@ -227,7 +228,7 @@ struct SyncSample {
 	SyncSample(uint64_t l, uint64_t r, uint32_t pp) : localT(l), remoteT(r), pingPongT(pp) {}
 };
 
-#ifdef WIN32
+#ifdef _WIN32
 ACQUIRE(critsec) static inline void lockMutex(CRITICAL_SECTION* critsec)
 {
 	EnterCriticalSection(critsec);
@@ -251,7 +252,7 @@ static inline void unlockMutex(MutexStruct* mtx) RELEASE(mtx)
 
 
 struct RemoteCaptury {
-	#ifdef WIN32
+	#ifdef _WIN32
 	HANDLE			streamThread;
 	HANDLE			receiveThread;
 	HANDLE			syncThread;
@@ -368,7 +369,7 @@ struct RemoteCaptury {
 	bool sendPacket(CapturyRequestPacket* packet, CapturyPacketTypes expectedReplyType);
 
 	void actualLog(int logLevel, const char* format, va_list args);
-	#ifdef WIN32
+	#ifdef _WIN32
 	void log(const char* format, ...);
 	#else
 	void log(const char *format, ...) __attribute__((format(printf,2,3)));
@@ -378,7 +379,7 @@ struct RemoteCaptury {
 	void updateSync(uint64_t localT);
 	uint64_t getRemoteTime(uint64_t localT);
 
-	#ifdef WIN32
+	#ifdef _WIN32
 	DWORD receiveLoop();
 	DWORD streamLoop(CapturyStreamPacketTcp* packet);
 	#else
@@ -391,7 +392,7 @@ struct RemoteCaptury {
 	bool receive(SOCKET& sok);
 	void deleteActors();
 
-	bool connect(const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort, int async, in_addr_t multicastAddress);
+	bool connect(const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort, int async, uint32_t multicastAddress);
 	bool disconnect();
 
 	int startStreamingImagesAndAngles(int what, int32_t camId, int numAngles, uint16_t* angles);
@@ -401,7 +402,7 @@ struct RemoteCaptury {
 
 void RemoteCaptury::actualLog(int logLevel, const char* format, va_list args)
 {
-	#ifdef WIN32
+	#ifdef _WIN32
 	if (!mutexesInited) {
 		InitializeCriticalSection(&mutex);
 		InitializeCriticalSection(&partialActorMutex);
@@ -674,7 +675,7 @@ static uint64_t convertFileTimeToTimestamp(FILETIME& ft)
 //
 static uint64_t getTime()
 {
-#ifdef WIN32
+#ifdef _WIN32
 	#ifdef SYSTEM_INFO
 	FILETIME ft;
 	GetSystemTimePreciseAsFileTime(&ft);
@@ -1080,7 +1081,7 @@ SOCKET RemoteCaptury::openTcpSocket()
 
 static bool isSocketErrorFatal(int err)
 {
-#ifdef WIN32
+#ifdef _WIN32
 	return (err == WSAENOTSOCK || err == WSAESHUTDOWN || err == WSAECONNABORTED || err == WSAECONNRESET || err == WSAENETDOWN || err == WSAENETUNREACH || err == WSAENETRESET || err == WSAEBADF);
 #else
 	return (err == EPIPE || err == ECONNRESET || err == ENETRESET || err == EBADF);
@@ -1089,7 +1090,7 @@ static bool isSocketErrorFatal(int err)
 
 static bool isSocketErrorTryAgain(int err)
 {
-#ifdef WIN32
+#ifdef _WIN32
 	return (err == WSAEINTR || err == WSAETIMEDOUT || err == WSAEWOULDBLOCK || err == WSAEINPROGRESS || err == 0);
 #else
 	return (err == EAGAIN || err == EBUSY || err == EINTR);
@@ -1616,7 +1617,7 @@ void RemoteCaptury::deleteActors()
 		actorChangedCallback(this, id, ACTOR_DELETED, actorChangedArg);
 }
 
-#ifdef WIN32
+#ifdef _WIN32
 static DWORD WINAPI receiveLoop(void* arg)
 #else
 static void* receiveLoop(void* arg)
@@ -1625,7 +1626,7 @@ static void* receiveLoop(void* arg)
 	return ((RemoteCaptury*)arg)->receiveLoop();
 }
 
-#ifdef WIN32
+#ifdef _WIN32
 DWORD RemoteCaptury::receiveLoop()
 #else
 void* RemoteCaptury::receiveLoop()
@@ -1643,7 +1644,7 @@ void* RemoteCaptury::receiveLoop()
 				if (isStreamThreadRunning) {
 					stopStreamThread = 1;
 
-					#ifdef WIN32
+					#ifdef _WIN32
 					WaitForSingleObject(streamThread, 1000);
 					#else
 					void* retVal;
@@ -1679,7 +1680,7 @@ bool RemoteCaptury::sendPacket(CapturyRequestPacket* packet, CapturyPacketTypes 
 	return true;
 }
 
-#ifdef WIN32
+#ifdef _WIN32
 static DWORD WINAPI streamLoop(void* arg)
 #else
 static void* streamLoop(void* arg)
@@ -1692,7 +1693,7 @@ static void* streamLoop(void* arg)
 	return 0;
 }
 
-#ifdef WIN32
+#ifdef _WIN32
 DWORD RemoteCaptury::streamLoop(CapturyStreamPacketTcp* packet)
 #else
 void* RemoteCaptury::streamLoop(CapturyStreamPacketTcp* packet)
@@ -1721,7 +1722,7 @@ void* RemoteCaptury::streamLoop(CapturyStreamPacketTcp* packet)
 		ip_mreq mreq;
 		mreq.imr_multiaddr.s_addr = localStreamAddress.sin_addr.s_addr;
 		mreq.imr_interface.s_addr = INADDR_ANY;
-		if (setsockopt(streamSock, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq)) != 0) {
+		if (setsockopt(streamSock, IPPROTO_IP, IP_ADD_MEMBERSHIP, (const char*)&mreq, sizeof(mreq)) != 0) {
 			closesocket(streamSock);
 			log("failed to join multicast group: %s\n", strerror(errno));
 			return 0;
@@ -1760,7 +1761,7 @@ void* RemoteCaptury::streamLoop(CapturyStreamPacketTcp* packet)
 		getsockname(streamSock, (sockaddr*) &thisEnd, &len);
 		streamSocketPort = thisEnd.sin_port;
 
-		#ifdef WIN32
+		#ifdef _WIN32
 		log("Stream receiving on %d.%d.%d.%d:%d\n", thisEnd.sin_addr.S_un.S_un_b.s_b1, thisEnd.sin_addr.S_un.S_un_b.s_b2, thisEnd.sin_addr.S_un.S_un_b.s_b3, thisEnd.sin_addr.S_un.S_un_b.s_b4, ntohs(thisEnd.sin_port));
 		#else
 		char buf[100];
@@ -1814,7 +1815,7 @@ void* RemoteCaptury::streamLoop(CapturyStreamPacketTcp* packet)
 		if (size == -1) { // error
 			int err = sockerror();
 			if (isSocketErrorTryAgain(err)) {
-				#ifdef WIN32
+				#ifdef _WIN32
 				if (err == 0) {
 					u_long read;
 					ioctlsocket(streamSock, FIONREAD, &read); // returns fill status of socket buffer...
@@ -2130,9 +2131,9 @@ extern "C" int Captury_connect2(RemoteCaptury* rc, const char* ip, unsigned shor
 	return rc->connect(ip, port, localPort, localStreamPort, async, multicastAddress);
 }
 
-bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort, int async, in_addr_t multicastAddress)
+bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort, int async, uint32_t multicastAddress)
 {
-#ifdef WIN32
+#ifdef _WIN32
 	if (!mutexesInited) {
 		InitializeCriticalSection(&mutex);
 		InitializeCriticalSection(&partialActorMutex);
@@ -2143,7 +2144,7 @@ bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short 
 #endif
 
 	struct in_addr addr;
-#ifdef WIN32
+#ifdef _WIN32
 	addr.S_un.S_addr = inet_addr(ip);
 #else
 	if (!inet_pton(AF_INET, ip, &addr))
@@ -2170,7 +2171,7 @@ bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short 
 
 	if (async == 0) {
 		if (sock == -1) {
-#ifdef WIN32
+#ifdef _WIN32
 			if (!wsaInited) {
 				WSADATA init;
 				WSAStartup(WINSOCK_VERSION, &init);
@@ -2185,7 +2186,7 @@ bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short 
 		receiveLoop(); // block until handshake is finished
 	}
 
-#ifdef WIN32
+#ifdef _WIN32
 	receiveThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)::receiveLoop, this, 0, NULL);
 #else
 	pthread_create(&receiveThread, NULL, ::receiveLoop, this);
@@ -2210,7 +2211,7 @@ bool RemoteCaptury::disconnect()
 		stopReceiving = 1;
 		stopStreamThread = 1;
 
-		#ifdef WIN32
+		#ifdef _WIN32
 
 		DWORD waitReceiveRet = WAIT_TIMEOUT;
 		DWORD waitStreamRet = WAIT_TIMEOUT;
@@ -2455,7 +2456,7 @@ int RemoteCaptury::startStreamingImagesAndAngles(int what, int32_t camId, int nu
 	packet->cameraId = camId;
 
 	stopStreamThread = 0;
-#ifdef WIN32
+#ifdef _WIN32
 	streamThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)::streamLoop, rec, 0, NULL);
 #else
 	pthread_create(&streamThread, NULL, ::streamLoop, rec);
@@ -2473,7 +2474,7 @@ extern "C" int Captury_stopStreaming(RemoteCaptury* rc, int wait)
 	rc->stopStreamThread = 1;
 
 	if (wait) {
-#ifdef WIN32
+#ifdef _WIN32
 		WaitForSingleObject(rc->streamThread, 1000);
 #else
 		void* retVal;
@@ -2553,6 +2554,7 @@ CapturyPose* RemoteCaptury::getCurrentPoseAndTrackingConsistencyForActor(int act
 	pose->timestamp = it->second.currentPose.timestamp;
 	pose->numTransforms = it->second.currentPose.numTransforms;
 	pose->transforms = (CapturyTransform*)&pose[1];
+	pose->flags = it->second.currentPose.flags;
 	pose->numBlendShapes = it->second.currentPose.numBlendShapes;
 	pose->blendShapeActivations = (float*)(((CapturyTransform*)&pose[1]) + pose->numTransforms);
 
@@ -2840,7 +2842,7 @@ extern "C" int Captury_stopRecording(RemoteCaptury* rc)
 	return 1;
 }
 
-#ifdef WIN32
+#ifdef _WIN32
 static DWORD WINAPI syncLoop(void* arg)
 #else
 static void* syncLoop(void* arg)
@@ -2867,7 +2869,7 @@ extern "C" void Captury_startTimeSynchronizationLoop(RemoteCaptury* rc)
 	if (rc->syncLoopIsRunning)
 		return;
 
-#ifdef WIN32
+#ifdef _WIN32
 	rc->syncThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)syncLoop, rc, 0, NULL);
 #else
 	pthread_create(&rc->syncThread, NULL, syncLoop, rc);
