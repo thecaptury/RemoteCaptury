@@ -3,13 +3,15 @@
 #include <stdint.h>
 #include "captury/PublicStructs.h"
 
-#pragma warning( push )
-#pragma warning( disable : 4200 ) // nonstandard extension used: zero-sized array in struct/union
+#if _MSC_VER
+  #pragma warning( push )
+  #pragma warning( disable : 4200 ) // nonstandard extension used: zero-sized array in struct/union
+#endif
 
 #ifdef WIN32
-#define CAPTURY_DLL_EXPORT __declspec(dllexport)
+  #define CAPTURY_DLL_EXPORT __declspec(dllexport)
 #else
-#define CAPTURY_DLL_EXPORT
+  #define CAPTURY_DLL_EXPORT
 #endif
 
 #ifdef __cplusplus
@@ -29,8 +31,8 @@ CAPTURY_DLL_EXPORT int Captury_connect(RemoteCaptury* rc, const char* ip, unsign
 // in case you need to set the local port because of firewalls, etc.
 // use 0 for localPort and localStreamPort if you don't care
 // if async != 0, the function will return immediately and perform the connection attempt asynchronously
-// use 0 for the multicast address if you don't want multicast use htonl(inet_addr("239.255.210.1")) if you do want multicast or CAPTURY_MULTICAST_ADDR
-#define CAPTURY_MULTICAST_ADDR	0xefffd201
+// use 0 for the multicast address if you don't want multicast use inet_addr("239.255.210.1") if you do want multicast or CAPTURY_MULTICAST_ADDR
+#define CAPTURY_MULTICAST_ADDR	0x1d2ffef
 CAPTURY_DLL_EXPORT int Captury_connect2(RemoteCaptury* rc, const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort, int async, uint32_t multicastAddress);
 
 // returns 1 if successful, 0 otherwise
