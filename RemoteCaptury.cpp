@@ -1755,7 +1755,10 @@ void* RemoteCaptury::streamLoop(CapturyStreamPacketTcp* packet)
 		log("stream receiving on %s:%d\n", inet_ntop(AF_INET, &thisEnd.sin_addr, buf, 100), ntohs(thisEnd.sin_port));
 	}
 
-	packet->ip = thisEnd.sin_addr.s_addr;
+	if (multicastAddress != INADDR_ANY && localStreamAddress.sin_addr.s_addr != INADDR_ANY)
+		packet->ip = multicastAddress;
+	else
+		packet->ip = thisEnd.sin_addr.s_addr;
 	packet->port = thisEnd.sin_port;
 
 	//	log("stream packet has size %d\n", packet->size);
@@ -2337,7 +2340,7 @@ extern "C" int Captury_getCameras(RemoteCaptury* rc, const CapturyCamera** cams,
 	if (rc->sock == -1 || cams == NULL)
 		return 0;
 
-	if (waitTime != 0) {
+	if (waitTimeMs != 0) {
 		CapturyRequestPacket packet;
 		packet.type = capturyCameras;
 		packet.size = sizeof(packet);
@@ -2349,7 +2352,10 @@ extern "C" int Captury_getCameras(RemoteCaptury* rc, const CapturyCamera** cams,
 		if (!rc->sendPacket(&packet, capturyCameras))
 			return 0;
 
-		sleepMicroSeconds(waitTime * 1000);
+		if (waitTimeMs < 0)
+			return 0;
+
+		sleepMicroSeconds(waitTimeMs * 1000);
 	}
 
 	static std::vector<CapturyCamera> camerasBuffer;
