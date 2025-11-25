@@ -1,6 +1,6 @@
 #include <stdio.h>
 #include "RemoteCaptury.h"
-#ifndef WIN32
+#ifndef _WIN32
 #include <unistd.h>
 #endif
 
@@ -45,7 +45,7 @@ int main(int argc, char** argv)
 	uint16_t angles[] = {CAPTURY_LEFT_KNEE_FLEXION_EXTENSION, CAPTURY_RIGHT_KNEE_FLEXION_EXTENSION};
 	Captury_startStreamingImagesAndAngles(rc, CAPTURY_STREAM_POSES | CAPTURY_STREAM_ANGLES, /*camera*/-1, 2, angles);
 
-	#ifdef WIN32
+	#ifdef _WIN32
 	Sleep(100000);
 	#else
 	usleep(10000*1000);
@@ -70,7 +70,7 @@ int main(int argc, char** argv)
 
 		// potentially Captury_freeActors() here
 
-		#ifdef WIN32
+		#ifdef _WIN32
 		Sleep(20);
 		#else
 		usleep(20*1000);

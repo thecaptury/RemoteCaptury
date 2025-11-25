@@ -1,6 +1,6 @@
 #include <stdio.h>
 #include "RemoteCaptury.h"
-#ifndef WIN32
+#ifndef _WIN32
 #include <unistd.h>
 #endif
 
@@ -108,7 +108,7 @@ int main(int argc, char** argv)
 		// potentially Captury_freeActors() here
 
 		// sleep 1 second
-		#ifdef WIN32
+		#ifdef _WIN32
 		Sleep(1000);
 		#else
 		usleep(1000*1000);

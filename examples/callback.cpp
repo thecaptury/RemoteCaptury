@@ -1,6 +1,6 @@
 #include <stdio.h>
 #include "RemoteCaptury.h"
-#ifndef WIN32
+#ifndef _WIN32
 #include <unistd.h>
 #endif
 
@@ -73,7 +73,7 @@ int main(int argc, char** argv)
 	// Additional flags should be added as required.
 	Captury_startStreaming(rc, CAPTURY_STREAM_POSES | CAPTURY_STREAM_COMPRESSED);
 
-	#ifdef WIN32
+	#ifdef _WIN32
 	Sleep(100000);
 	#else
 	usleep(100000*1000);
