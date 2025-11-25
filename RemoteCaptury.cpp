@@ -96,8 +96,14 @@ typedef uint32_t uint;
     #define RELEASE(...)
   #endif
 #endif
-// #pragma clang optimize off
-// #pragma GCC optimize("O0")
+#ifdef _MSC_VER
+  #define DEBUG_STOP_OPT_FORCE __pragma(optimize("", off))
+#elif defined __clang__
+  #define DEBUG_STOP_OPT_FORCE _Pragma("clang optimize off")
+#else
+  #define DEBUG_STOP_OPT_FORCE _Pragma("GCC push_options") _Pragma("GCC optimize(\"O0\")")
+#endif
+//DEBUG_STOP_OPT_FORCE
 
 #ifdef WIN32
 
