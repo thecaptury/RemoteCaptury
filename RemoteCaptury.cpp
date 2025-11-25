@@ -348,6 +348,7 @@ struct RemoteCaptury {
 	sockaddr_in	localAddress; // local address
 	sockaddr_in	localStreamAddress; // local address for streaming socket
 	sockaddr_in	remoteAddress; // address of server
+	uint32_t	multicastAddress = INADDR_ANY;
 	uint16_t	streamSocketPort = 0;
 
 	uint64_t	pingTime;
@@ -397,7 +398,7 @@ struct RemoteCaptury {
 	bool receive(SOCKET& sok);
 	void deleteActors();
 
-	bool connect(const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort, int async, uint32_t multicastAddress);
+	bool connect(const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort, int async, uint32_t localAddress, uint32_t multicastAddress);
 	bool disconnect();
 
 	int startStreamingImagesAndAngles(int what, int32_t camId, int numAngles, uint16_t* angles);
@@ -1193,7 +1194,7 @@ bool RemoteCaptury::receive(SOCKET& sok)
 			size = std::min<int>(p->size, (int)buffer.size());
 		}
 
-		log("received packet size %d type %d %s\n", size, p->type, Captury_getHumanReadableMessageType((CapturyPacketTypes)p->type));
+		// log("received packet size %d type %d %s\n", size, p->type, Captury_getHumanReadableMessageType((CapturyPacketTypes)p->type));
 
 		switch (p->type) {
 		case capturyHello:
@@ -1703,29 +1704,26 @@ void* RemoteCaptury::streamLoop(CapturyStreamPacketTcp* packet)
 		return 0;
 	}
 
-	if (localStreamAddress.sin_addr.s_addr != INADDR_ANY) { // multicast
-		sockaddr_in addr;
-		addr.sin_family = AF_INET;
-		addr.sin_addr.s_addr = htonl(INADDR_ANY);
-		addr.sin_port = localStreamAddress.sin_port;
-		if (bind(streamSock, (const sockaddr*)&addr, sizeof(addr)) != 0) {
-			closesocket(streamSock);
-			log("failed to bind stream socket\n");
-			return 0;
-		}
+	const int yes = 1;
+	setsockopt(streamSock, SOL_SOCKET, SO_REUSEADDR, (const char*)&yes, sizeof(yes));
 
+	if (bind(streamSock, (const sockaddr*)&localStreamAddress, sizeof(localStreamAddress)) != 0) {
+		closesocket(streamSock);
+		char buf[100];
+		log("failed to bind stream socket to %s:%d\n", inet_ntop(AF_INET, &localStreamAddress.sin_addr.s_addr, buf, 100), htons(localStreamAddress.sin_port));
+		return 0;
+	}
+
+	if (localStreamAddress.sin_addr.s_addr != INADDR_ANY && multicastAddress != INADDR_ANY) { // multicast
 		ip_mreq mreq;
-		mreq.imr_multiaddr.s_addr = localStreamAddress.sin_addr.s_addr;
-		mreq.imr_interface.s_addr = INADDR_ANY;
+		mreq.imr_multiaddr.s_addr = multicastAddress;
+		mreq.imr_interface.s_addr = localStreamAddress.sin_addr.s_addr;
 		if (setsockopt(streamSock, IPPROTO_IP, IP_ADD_MEMBERSHIP, (const char*)&mreq, sizeof(mreq)) != 0) {
 			closesocket(streamSock);
-			log("failed to join multicast group: %s\n", strerror(errno));
-			return 0;
-		}
-	} else {
-		if (bind(streamSock, (const sockaddr*)&localStreamAddress, sizeof(localStreamAddress)) != 0) {
-			closesocket(streamSock);
-			log("failed to bind stream socket\n");
+			char mcBuf[100], ifBuf[100];
+			inet_ntop(AF_INET, &mreq.imr_multiaddr.s_addr, mcBuf, 100);
+			inet_ntop(AF_INET, &mreq.imr_interface.s_addr, ifBuf, 100);
+			log("failed to join multicast group at %s via interface %s: %s\n", mcBuf, ifBuf, strerror(errno));
 			return 0;
 		}
 	}
@@ -1756,12 +1754,8 @@ void* RemoteCaptury::streamLoop(CapturyStreamPacketTcp* packet)
 		getsockname(streamSock, (sockaddr*) &thisEnd, &len);
 		streamSocketPort = thisEnd.sin_port;
 
-		#ifdef WIN32
-		log("Stream receiving on %d.%d.%d.%d:%d\n", thisEnd.sin_addr.S_un.S_un_b.s_b1, thisEnd.sin_addr.S_un.S_un_b.s_b2, thisEnd.sin_addr.S_un.S_un_b.s_b3, thisEnd.sin_addr.S_un.S_un_b.s_b4, ntohs(thisEnd.sin_port));
-		#else
 		char buf[100];
 		log("stream receiving on %s:%d\n", inet_ntop(AF_INET, &thisEnd.sin_addr, buf, 100), ntohs(thisEnd.sin_port));
-		#endif
 	}
 
 	packet->ip = thisEnd.sin_addr.s_addr;
@@ -2117,16 +2111,16 @@ extern "C" int Captury_destroy(RemoteCaptury* rc)
 
 extern "C" int Captury_connect(RemoteCaptury* rc, const char* ip, unsigned short port)
 {
-	return rc->connect(ip, port, 0, 0, 0, INADDR_ANY);
+	return rc->connect(ip, port, 0, 0, 0, INADDR_ANY, INADDR_ANY);
 }
 
 // returns 1 if successful, 0 otherwise
-extern "C" int Captury_connect2(RemoteCaptury* rc, const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort, int async, uint32_t multicastAddress)
+extern "C" int Captury_connect2(RemoteCaptury* rc, const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort, int async, uint32_t localAddress, uint32_t multicastAddress)
 {
-	return rc->connect(ip, port, localPort, localStreamPort, async, multicastAddress);
+	return rc->connect(ip, port, localPort, localStreamPort, async, localAddress, multicastAddress);
 }
 
-bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort, int async, uint32_t multicastAddress)
+bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort, int async, uint32_t localAddr, uint32_t multicastAddr)
 {
 #ifdef WIN32
 	if (!mutexesInited) {
@@ -2154,8 +2148,10 @@ bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short 
 	localAddress.sin_port = htons(localPort);
 
 	localStreamAddress.sin_family = AF_INET;
-	localStreamAddress.sin_addr.s_addr = multicastAddress;
+	localStreamAddress.sin_addr.s_addr = htonl(localAddr);
 	localStreamAddress.sin_port = htons(localStreamPort);
+
+	multicastAddress = htonl(multicastAddr);
 
 	remoteAddress.sin_family = AF_INET;
 	remoteAddress.sin_addr = addr;
