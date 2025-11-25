@@ -290,8 +290,7 @@ struct RemoteCaptury {
 
 	std::unordered_map<int, std::vector<CapturyAngleData>> currentAngles;
 
-	int numCameras = -1;
-	std::vector<CapturyCamera> cameras;
+	std::unordered_map<int32_t, CapturyCamera> cameras;
 
 	CapturyLatencyPacket currentLatency;
 	uint64_t receivedPoseTime; // time pose packet was received
@@ -1205,15 +1204,6 @@ bool RemoteCaptury::receive(SOCKET& sok)
 			// }
 			// numRetries += packetsMissing;
 			break; }
-		case capturyCameras: {
-			CapturyCamerasPacket* ccp = (CapturyCamerasPacket*)p;
-			numCameras = ccp->numCameras;
-			// if (expect == capturyCameras) {
-			// 	packetsMissing = numCameras;
-			// 	expect = capturyCamera;
-			// }
-			// numRetries += packetsMissing;
-			break; }
 		case capturyActor:
 		case capturyActor2:
 		case capturyActor3: {
@@ -1443,7 +1433,7 @@ bool RemoteCaptury::receive(SOCKET& sok)
 			// TODO compute extrinsic and intrinsic matrix
 
 			lockMutex(&mutex);
-			cameras.push_back(camera);
+			cameras[camera.id] = camera;
 			unlockMutex(&mutex);
 			break; }
 		case capturyPose:
@@ -1639,7 +1629,6 @@ void* RemoteCaptury::receiveLoop()
 			if (sock == -1) {
 				deleteActors();
 				cameras.clear();
-				numCameras = -1;
 
 				if (isStreamThreadRunning) {
 					stopStreamThread = 1;
@@ -2263,7 +2252,6 @@ bool RemoteCaptury::disconnect()
 
 	deleteActors();
 	cameras.clear();
-	numCameras = -1;
 
 	return closedOrStopped ? 1 : 0;
 }
@@ -2345,25 +2333,34 @@ extern "C" void Captury_freeActor(RemoteCaptury* rc, const CapturyActor* actor)
 
 // returns the number of cameras
 // the array is owned by the library - do not free
-extern "C" int Captury_getCameras(RemoteCaptury* rc, const CapturyCamera** cams)
+extern "C" int Captury_getCameras(RemoteCaptury* rc, const CapturyCamera** cams, int waitTimeMs)
 {
 	if (rc->sock == -1 || cams == NULL)
 		return 0;
 
-	CapturyRequestPacket packet;
-	packet.type = capturyCameras;
-	packet.size = sizeof(packet);
+	if (waitTime != 0) {
+		CapturyRequestPacket packet;
+		packet.type = capturyCameras;
+		packet.size = sizeof(packet);
 
-	if (rc->numCameras == -1) {
+		lockMutex(&rc->mutex);
+		rc->cameras.clear();
+		unlockMutex(&rc->mutex);
+
 		if (!rc->sendPacket(&packet, capturyCameras))
 			return 0;
 
-		sleepMicroSeconds(10000);
+		sleepMicroSeconds(waitTime * 1000);
 	}
 
 	static std::vector<CapturyCamera> camerasBuffer;
 	lockMutex(&rc->mutex);
-	camerasBuffer = rc->cameras;
+	camerasBuffer.resize(rc->cameras.size());
+	int at = 0;
+	for (const auto& it : rc->cameras) {
+		camerasBuffer[at] = it.second;
+		++at;
+	}
 	unlockMutex(&rc->mutex);
 
 	if (camerasBuffer.empty())

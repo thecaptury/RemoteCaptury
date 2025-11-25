@@ -65,8 +65,9 @@ CAPTURY_DLL_EXPORT void Captury_freeActors(RemoteCaptury* rc);
 
 // returns the number of cameras
 // on exit *cameras points to an array of CapturyCamera
+// if waitTime is 0 locally cached cameras are returned
 // the array is owned by the library - do not free
-CAPTURY_DLL_EXPORT int Captury_getCameras(RemoteCaptury* rc, const CapturyCamera** cameras);
+CAPTURY_DLL_EXPORT int Captury_getCameras(RemoteCaptury* rc, const CapturyCamera** cameras, int waitTimeMs);
 
 
 #define CAPTURY_LEFT_KNEE_FLEXION_EXTENSION		1
