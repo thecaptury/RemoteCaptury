@@ -1292,10 +1292,7 @@ bool RemoteCaptury::receive(SOCKET& sok)
 				//log("received fulll actor %d\n", actor->id);
 				lockMutex(&mutex);
 				actorsById[actor->id] = actor;
-				CapturyActorStatus status = actorData[actor->id].status;
 				unlockMutex(&mutex);
-				if (actorChangedCallback)
-					actorChangedCallback(this, actor->id, status, actorChangedArg);
 			} else {
 				lockMutex(&partialActorMutex);
 				partialActors[actor->id] = actor;
@@ -1368,10 +1365,7 @@ bool RemoteCaptury::receive(SOCKET& sok)
 				// log("received fulll actor %d\n", actor->id);
 				lockMutex(&mutex);
 				actorsById[actor->id] = actor;
-				CapturyActorStatus status = actorData[actor->id].status;
 				unlockMutex(&mutex);
-				if (actorChangedCallback)
-					actorChangedCallback(this, actor->id, status, actorChangedArg);
 				lockMutex(&partialActorMutex);
 				partialActors.erase(actor->id);
 				unlockMutex(&partialActorMutex);
@@ -1418,7 +1412,10 @@ bool RemoteCaptury::receive(SOCKET& sok)
 			CapturyActor_p actor = actorsById[cbt->actorId];
 			for (int i = 0; i < std::min<int>(actor->numJoints, size - sizeof(CapturyBoneTypePacket)); ++i)
 				actor->joints[i].boneType = cbt->boneTypes[i];
+			CapturyActorStatus status = actorData[actor->id].status;
 			unlockMutex(&mutex);
+			if (actorChangedCallback)
+				actorChangedCallback(this, actor->id, status, actorChangedArg);
 			break; }
 		case capturyCamera: {
 			CapturyCamera camera;
