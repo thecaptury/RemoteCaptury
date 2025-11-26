@@ -372,6 +372,9 @@ struct RemoteCaptury {
 	GUARDED_BY_MSVC(syncMutex) uint64_t transitionStartLocalT GUARDED_BY(syncMutex) = 0;
 	GUARDED_BY_MSVC(syncMutex) uint64_t transitionEndLocalT GUARDED_BY(syncMutex) = 0;
 
+	CapturyLogCallback logCallback = nullptr;
+	void* logUserArg = nullptr;
+
 	bool sendPacket(CapturyRequestPacket* packet, CapturyPacketTypes expectedReplyType);
 
 	void actualLog(int logLevel, const char* format, va_list args);
@@ -423,6 +426,8 @@ void RemoteCaptury::actualLog(int logLevel, const char* format, va_list args)
 
 	if (doPrintf)
 		printf("%s", buffer + 9);
+	if (logCallback)
+		logCallback(logLevel, buffer + 9, logUserArg);
 
 	lockMutex(&logMutex);
 	logs.emplace_back(buffer + 9);
@@ -446,6 +451,12 @@ void RemoteCaptury::log(const char* format, ...)
 	va_start(args, format);
 	actualLog(CAPTURY_LOG_INFO, format, args);
 	va_end(args);
+}
+
+void Captury_registerLogCallback(RemoteCaptury* rc, CapturyLogCallback callback, void* userArg)
+{
+	rc->logCallback = callback;
+	rc->logUserArg = userArg;
 }
 
 void Captury_log(RemoteCaptury* rc, int logLevel, const char* format, ...)

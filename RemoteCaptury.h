@@ -368,6 +368,10 @@ CAPTURY_DLL_EXPORT const char* Captury_getNextLogMessage(RemoteCaptury* rc); // 
 
 CAPTURY_DLL_EXPORT void Captury_log(RemoteCaptury* rc, int logLevel, const char* format, ...);
 
+typedef void (*CapturyLogCallback)(int logLevel, const char* msg, void* userArg);
+
+CAPTURY_DLL_EXPORT void Captury_registerLogCallback(RemoteCaptury* rc, CapturyLogCallback callback, void* userArg);
+
 //
 // it is safe to ignore everything below this line
 //
