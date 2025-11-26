@@ -1072,11 +1072,16 @@ SOCKET RemoteCaptury::openTcpSocket()
 	log("opening TCP socket\n");
 
 	sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-	if (sock == -1)
+	if (sock == -1) {
+		log("failed to open socket: %s\n", sockstrerror());
 		return (SOCKET)-1;
+	}
 
 	if (localAddress.sin_port != 0 && bind(sock, (sockaddr*) &localAddress, sizeof(localAddress)) != 0) {
+		char buf[100];
+		log("failed to bind to %s:%d: %s\n", inet_ntop(AF_INET, &localAddress.sin_addr, buf, 100), ntohs(localAddress.sin_port), sockstrerror());
 		closesocket(sock);
+		sock = -1;
 		return (SOCKET)-1;
 	}
 
@@ -1084,6 +1089,7 @@ SOCKET RemoteCaptury::openTcpSocket()
 		char buf[100];
 		log("failed to connect to %s:%d: %s\n", inet_ntop(AF_INET, &remoteAddress.sin_addr, buf, 100), ntohs(remoteAddress.sin_port), sockstrerror());
 		closesocket(sock);
+		sock = -1;
 		return (SOCKET)-1;
 	}
 
@@ -1115,7 +1121,7 @@ static bool isSocketErrorTryAgain(int err)
 }
 
 // waits for at most 500ms before it fails
-// returns false if the expected packet is not received
+// returns false if there was an error receiving (or a timeout)
 bool RemoteCaptury::receive(SOCKET& sok)
 {
 	static std::vector<char> buffer(9000);
@@ -1420,14 +1426,18 @@ bool RemoteCaptury::receive(SOCKET& sok)
 		case capturyBoneTypes: {
 			CapturyBoneTypePacket* cbt = (CapturyBoneTypePacket*)p;
 			lockMutex(&mutex);
-			CapturyActor_p actor = actorsById[cbt->actorId];
-			for (int i = 0; i < std::min<int>(actor->numJoints, size - sizeof(CapturyBoneTypePacket)); ++i)
-				actor->joints[i].boneType = cbt->boneTypes[i];
-			CapturyActorStatus status = actorData[actor->id].status;
-			unlockMutex(&mutex);
-			if (actorChangedCallback)
-				actorChangedCallback(this, actor->id, status, actorChangedArg);
-			break; }
+			if (actorsById.count(cbt->actorId) && actorsById[cbt->actorId]) {
+				CapturyActor_p actor = actorsById[cbt->actorId];
+				for (int i = 0; i < std::min<int>(actor->numJoints, size - sizeof(CapturyBoneTypePacket)); ++i)
+					actor->joints[i].boneType = cbt->boneTypes[i];
+				CapturyActorStatus status = actorData[actor->id].status;
+				unlockMutex(&mutex);
+				if (actorChangedCallback)
+					actorChangedCallback(this, actor->id, status, actorChangedArg);
+			} else
+				unlockMutex(&mutex);
+			break;
+		}
 		case capturyCamera: {
 			CapturyCamera camera;
 			CapturyCameraPacket* ccp = (CapturyCameraPacket*)p;
@@ -1637,6 +1647,7 @@ DWORD RemoteCaptury::receiveLoop()
 void* RemoteCaptury::receiveLoop()
 #endif
 {
+	uint64_t handshakeStart = getTime();
 	bool handshaking = !handshakeFinished;
 	log("starting receive loop\n");
 	while (!stopReceiving && (!handshaking || !handshakeFinished)) {
@@ -1649,11 +1660,17 @@ void* RemoteCaptury::receiveLoop()
 					stopStreamThread = 1;
 
 					#ifdef _WIN32
-					WaitForSingleObject(streamThread, 1000);
+					if (streamThread != INVALID_HANDLE_VALUE) {
+						WaitForSingleObject(streamThread, 10000);
+						CloseHandle(streamThread);
+						streamThread = INVALID_HANDLE_VALUE;
+					}
 					#else
 					void* retVal;
 					pthread_join(streamThread, &retVal);
 					#endif
+					if (handshaking && getTime() > handshakeStart + 1000000)
+						return 0;
 				}
 
 				while (!stopReceiving) {
@@ -1662,6 +1679,8 @@ void* RemoteCaptury::receiveLoop()
 						break;
 
 					sleepMicroSeconds(100000);
+					if (handshaking && getTime() > handshakeStart + 1000000)
+						return 0;
 				}
 
 				if (streamWhat != CAPTURY_STREAM_NOTHING)
@@ -1670,6 +1689,8 @@ void* RemoteCaptury::receiveLoop()
 				handshaking = false; // this is a lie but makes it go into the normal loop
 			}
 		}
+		if (handshaking && getTime() > handshakeStart + 1000000)
+			return 0;
 	}
 	log("stopping receive loop\n");
 
@@ -2218,12 +2239,18 @@ bool RemoteCaptury::disconnect()
 
 		#ifdef _WIN32
 
-		if (WaitForSingleObject(receiveThread, 10000) != WAIT_OBJECT_0)
-			log("RemoteCaptury::disconnect() warning: receiveThread termination failed!");
+		if (receiveThread != INVALID_HANDLE_VALUE) {
+			if (WaitForSingleObject(receiveThread, 10000) != WAIT_OBJECT_0)
+				log("RemoteCaptury::disconnect() warning: receiveThread termination failed!");
+			CloseHandle(receiveThread);
+			receiveThread = INVALID_HANDLE_VALUE;
+		}
 
-		if (isStreamThreadRunning) {
+		if (isStreamThreadRunning && streamThread != INVALID_HANDLE_VALUE) {
 			if (WaitForSingleObject(streamThread, 10000) != WAIT_OBJECT_0)
 				log("RemoteCaptury:disconnect() warning: streamThread termination failed!");
+			CloseHandle(streamThread);
+			streamThread = INVALID_HANDLE_VALUE;
 		}
 
 		if (wsaInited) {
@@ -2472,7 +2499,11 @@ extern "C" int Captury_stopStreaming(RemoteCaptury* rc, int wait)
 
 	if (wait) {
 #ifdef _WIN32
-		WaitForSingleObject(rc->streamThread, 1000);
+		if (rc->streamThread != INVALID_HANDLE_VALUE) {
+			WaitForSingleObject(rc->streamThread, 1000);
+			CloseHandle(rc->streamThread);
+			rc->streamThread = INVALID_HANDLE_VALUE;
+		}
 #else
 		void* retVal;
 		pthread_join(rc->streamThread, &retVal);
