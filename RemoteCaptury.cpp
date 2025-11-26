@@ -259,8 +259,8 @@ static inline void unlockMutex(MutexStruct* mtx) RELEASE(mtx)
 
 struct RemoteCaptury {
 	#ifdef _WIN32
-	HANDLE			streamThread;
-	HANDLE			receiveThread;
+	HANDLE			streamThread = INVALID_HANDLE_VALUE;
+	HANDLE			receiveThread = INVALID_HANDLE_VALUE;
 	HANDLE			syncThread;
 	CRITICAL_SECTION	mutex;
 	CRITICAL_SECTION	partialActorMutex;
@@ -1060,29 +1060,29 @@ SOCKET RemoteCaptury::openTcpSocket()
 {
 	log("opening TCP socket\n");
 
-	SOCKET sok = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-	if (sok == -1)
+	sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	if (sock == -1)
 		return (SOCKET)-1;
 
-	if (localAddress.sin_port != 0 && bind(sok, (sockaddr*) &localAddress, sizeof(localAddress)) != 0) {
-		closesocket(sok);
+	if (localAddress.sin_port != 0 && bind(sock, (sockaddr*) &localAddress, sizeof(localAddress)) != 0) {
+		closesocket(sock);
 		return (SOCKET)-1;
 	}
 
-	if (::connect(sok, (sockaddr*) &remoteAddress, sizeof(remoteAddress)) != 0) {
+	if (::connect(sock, (sockaddr*) &remoteAddress, sizeof(remoteAddress)) != 0) {
 		char buf[100];
 		log("failed to connect to %s:%d: %s\n", inet_ntop(AF_INET, &remoteAddress.sin_addr, buf, 100), ntohs(remoteAddress.sin_port), sockstrerror());
-		closesocket(sok);
+		closesocket(sock);
 		return (SOCKET)-1;
 	}
 
 	// set read timeout
-	setSocketTimeout(sok, 500);
+	setSocketTimeout(sock, 500);
 
 	char buf[100];
 	log("connected to %s:%d\n", inet_ntop(AF_INET, &remoteAddress.sin_addr, buf, 100), ntohs(remoteAddress.sin_port));
 
-	return sok;
+	return sock;
 }
 
 static bool isSocketErrorFatal(int err)
@@ -1646,7 +1646,7 @@ void* RemoteCaptury::receiveLoop()
 				}
 
 				while (!stopReceiving) {
-					sock = openTcpSocket();
+					openTcpSocket();
 					if (sock != -1)
 						break;
 
@@ -2170,7 +2170,7 @@ bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short 
 			}
 #endif
 
-			if ((sock = openTcpSocket()) == -1)
+			if (openTcpSocket() == -1)
 				return 0;
 		}
 
@@ -2202,34 +2202,18 @@ bool RemoteCaptury::disconnect()
 		stopReceiving = 1;
 		stopStreamThread = 1;
 
+		// close the TCP socket to prevent a looong wait on disconnect
+		closesocket(sock);
+
 		#ifdef _WIN32
 
-		DWORD waitReceiveRet = WAIT_TIMEOUT;
-		DWORD waitStreamRet = WAIT_TIMEOUT;
-
-		int counter = 0;
-
-		while (waitReceiveRet == WAIT_TIMEOUT && counter < 10) {
-			log("RemoteCaptury::disconnect(): waiting for receiveThread");
-			waitReceiveRet = WaitForSingleObject(receiveThread, 1000);
-
-			counter++;
-		}
-
-		if (waitReceiveRet != WAIT_OBJECT_0)
+		if (WaitForSingleObject(receiveThread, 10000) != WAIT_OBJECT_0)
 			log("RemoteCaptury::disconnect() warning: receiveThread termination failed!");
 
-		counter = 0;
-
-		while (waitStreamRet == WAIT_TIMEOUT && counter < 10) {
-			log("RemoteCaptury::disconnect(): waiting for streamThread");
-			waitStreamRet = WaitForSingleObject(streamThread, 1000);
-
-			counter++;
+		if (isStreamThreadRunning) {
+			if (WaitForSingleObject(streamThread, 10000) != WAIT_OBJECT_0)
+				log("RemoteCaptury:disconnect() warning: streamThread termination failed!");
 		}
-
-		if (waitStreamRet != WAIT_OBJECT_0)
-			log("RemoteCaptury:disconnect() warning: streamThread termination failed!");
 
 		if (wsaInited) {
 			WSACleanup();
