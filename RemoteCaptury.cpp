@@ -273,7 +273,9 @@ struct RemoteCaptury {
 	bool mutexesInited = false;
 	#else
 	pthread_t	streamThread;
+	bool		streamThreadJoined = true;
 	pthread_t	receiveThread;
+	bool		receiveThreadJoined = true;
 	pthread_t	syncThread;
 	MutexStruct	mutex;
 	MutexStruct	partialActorMutex;
@@ -405,7 +407,7 @@ struct RemoteCaptury {
 	void receivedPose(CapturyPose* pose, int actorId, ActorData* aData, uint64_t timestamp);
 	void receivedPosePacket(CapturyPosePacket* cpp);
 	SOCKET openTcpSocket();
-	bool receive();
+	bool receive(std::vector<char>& buffer);
 	void deleteActors();
 
 	bool connect(const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort, int async, uint32_t localAddress, uint32_t multicastAddress);
@@ -1158,9 +1160,8 @@ void RemoteCaptury::safeCloseSocket()
 
 // waits for at most 500ms before it fails
 // returns false if there was an error receiving (or a timeout)
-bool RemoteCaptury::receive()
+bool RemoteCaptury::receive(std::vector<char>& buffer)
 {
-	static std::vector<char> buffer(9000);
 	CapturyRequestPacket* p = (CapturyRequestPacket*)buffer.data();
 
 	{
@@ -1440,16 +1441,18 @@ bool RemoteCaptury::receive()
 		case capturyActorMetaData: {
 			CapturyActorMetaDataPacket* cmd = (CapturyActorMetaDataPacket*)p;
 			lockMutex(&mutex);
-			CapturyActor_p actor = actorsById[cmd->actorId];
-			actor->numMetaData = cmd->numEntries;
-			actor->metaDataKeys = new char*[actor->numMetaData];
-			actor->metaDataValues = new char*[actor->numMetaData];
-			char* at = cmd->metaData;
-			for (int i = 0; i < actor->numMetaData; ++i) { // from a memory allocation perspective this is pretty inefficient
-				actor->metaDataKeys[i] = strdup(at);
-				at += strlen(actor->metaDataKeys[i]) + 1;
-				actor->metaDataValues[i] = strdup(at);
-				at += strlen(actor->metaDataValues[i]) + 1;
+			if (actorsById.count(cmd->actorId) && actorsById[cmd->actorId]) {
+				CapturyActor_p actor = actorsById[cmd->actorId];
+				actor->numMetaData = cmd->numEntries;
+				actor->metaDataKeys = new char*[actor->numMetaData];
+				actor->metaDataValues = new char*[actor->numMetaData];
+				char* at = cmd->metaData;
+				for (int i = 0; i < actor->numMetaData; ++i) { // from a memory allocation perspective this is pretty inefficient
+					actor->metaDataKeys[i] = strdup(at);
+					at += strlen(actor->metaDataKeys[i]) + 1;
+					actor->metaDataValues[i] = strdup(at);
+					at += strlen(actor->metaDataValues[i]) + 1;
+				}
 			}
 			unlockMutex(&mutex);
 			break; }
@@ -1678,11 +1681,13 @@ DWORD RemoteCaptury::receiveLoop()
 void* RemoteCaptury::receiveLoop()
 #endif
 {
+	std::vector<char> buffer(9000);
+
 	uint64_t handshakeStart = getTime();
 	bool handshaking = !handshakeFinished;
 	log("starting receive loop sock=%d handshaking=%d handshakeFinished=%d\n", sock, handshaking, handshakeFinished);
 	while (!stopReceiving && (!handshaking || !handshakeFinished)) {
-		if (sock == -1 || !receive()) {
+		if (sock == -1 || !receive(buffer)) {
 			if (sock == -1) {
 				deleteActors();
 				cameras.clear();
@@ -1698,7 +1703,10 @@ void* RemoteCaptury::receiveLoop()
 					}
 					#else
 					void* retVal;
-					pthread_join(streamThread, &retVal);
+					if (!streamThreadJoined) {
+						pthread_join(streamThread, &retVal);
+						streamThreadJoined = true;
+					}
 					#endif
 					if (handshaking && getTime() > handshakeStart + 1000000) {
 						receiveThreadRunning = false;
@@ -2207,8 +2215,10 @@ bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short 
 #ifdef _WIN32
 	addr.S_un.S_addr = inet_addr(ip);
 #else
-	if (!inet_pton(AF_INET, ip, &addr))
+	if (!inet_pton(AF_INET, ip, &addr)) {
+		unlockMutex(&connectMutex);
 		return 0;
+	}
 #endif
 
 	if (sock != -1 || receiveThreadRunning)
@@ -2258,6 +2268,7 @@ bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short 
 #ifdef _WIN32
 	receiveThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)::receiveLoop, this, 0, NULL);
 #else
+	receiveThreadJoined = false;
 	pthread_create(&receiveThread, NULL, ::receiveLoop, this);
 #endif
 
@@ -2277,7 +2288,7 @@ extern "C" int Captury_disconnect(RemoteCaptury* rc)
 
 bool RemoteCaptury::disconnect()
 {
-	log("RemoteCaptury::disconnect sock=%d, stopReceiving=%d, handshakeFinished=%d\n", sock, stopReceiving, handshakeFinished);
+	log("RemoteCaptury::disconnect sock=%d, stopReceiving=%d, handshakeFinished=%d, isConnected=%d, receiveThreadJoined=%d\n", sock, stopReceiving, handshakeFinished, isConnected, receiveThreadJoined);
 	bool closedOrStopped = false;
 
 	if (!stopReceiving) {
@@ -2313,8 +2324,14 @@ bool RemoteCaptury::disconnect()
 
 		#else
 		void* retVal;
-		pthread_join(receiveThread, &retVal);
-		pthread_join(streamThread, &retVal);
+		if (!receiveThreadJoined) {
+			pthread_join(receiveThread, &retVal);
+			receiveThreadJoined = true;
+		}
+		if (!streamThreadJoined) {
+			pthread_join(streamThread, &retVal);
+			streamThreadJoined = true;
+		}
 		#endif
 
 		closedOrStopped = true;
@@ -2537,6 +2554,7 @@ int RemoteCaptury::startStreamingImagesAndAngles(int what, int32_t camId, int nu
 #ifdef _WIN32
 	streamThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)::streamLoop, rec, 0, NULL);
 #else
+	streamThreadJoined = false;
 	pthread_create(&streamThread, NULL, ::streamLoop, rec);
 #endif
 
@@ -2560,7 +2578,10 @@ extern "C" int Captury_stopStreaming(RemoteCaptury* rc, int wait)
 		}
 #else
 		void* retVal;
-		pthread_join(rc->streamThread, &retVal);
+		if (!rc->streamThreadJoined) {
+			pthread_join(rc->streamThread, &retVal);
+			rc->streamThreadJoined = true;
+		}
 #endif
 	}
 
