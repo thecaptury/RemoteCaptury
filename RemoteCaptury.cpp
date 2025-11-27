@@ -2268,9 +2268,9 @@ bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short 
 // returns 1 if successful, 0 otherwise
 extern "C" int Captury_disconnect(RemoteCaptury* rc)
 {
-	lockMutex(&rc->connectMutex); rc-
+	lockMutex(&rc->connectMutex);
 	rc->disconnect();
-	lockMutex(&rc->connectMutex); rc->lockedAt = -rc->lockedAt;
+	lockMutex(&rc->connectMutex);
 	rc->log("RemoteCaptury disconnected\n");
 	return 1;
 }
