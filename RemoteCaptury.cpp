@@ -1667,9 +1667,9 @@ void* RemoteCaptury::receiveLoop()
 {
 	uint64_t handshakeStart = getTime();
 	bool handshaking = !handshakeFinished;
-	log("starting receive loop\n");
+	log("starting receive loop sock=%d handshaking=%d handshakeFinished=%d\n", sock, handshaking, handshakeFinished);
 	while (!stopReceiving && (!handshaking || !handshakeFinished)) {
-		if (!receive(sock)) {
+		if (sock == -1 || !receive(sock)) {
 			if (sock == -1) {
 				deleteActors();
 				cameras.clear();
@@ -2193,6 +2193,8 @@ bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short 
 	if (sock != -1)
 		disconnect();
 
+	log("RemoteCaptury: connecting %s to %s:%d, sock=%d", async ? "async" : "blocking", ip, port, sock);
+
 	localAddress.sin_family = AF_INET;
 	localAddress.sin_addr.s_addr = htonl(INADDR_ANY);
 	localAddress.sin_port = htons(localPort);
@@ -2225,6 +2227,8 @@ bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short 
 		}
 
 		receiveLoop(); // block until handshake is finished
+
+		log("RemoteCaptury: going async now: sock=%d, handshakeFinished: %d", sock, handshakeFinished);
 	}
 
 #ifdef _WIN32
@@ -2245,6 +2249,7 @@ extern "C" int Captury_disconnect(RemoteCaptury* rc)
 
 bool RemoteCaptury::disconnect()
 {
+	log("RemoteCaptury::disconnect sock=%d, stopReceiving=%d", sock, stopReceiving);
 	bool closedOrStopped = false;
 
 	if (!stopReceiving) {
