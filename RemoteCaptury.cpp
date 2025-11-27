@@ -17,6 +17,9 @@
 
 #include <stdlib.h>
 #include <stdio.h>
+#ifdef __ANDROID__
+  #include <android/log.h>
+#endif
 
 #pragma warning( push )
 #pragma warning( disable : 4100 ) // 'identifier' : unreferenced formal parameter
@@ -424,8 +427,23 @@ void RemoteCaptury::actualLog(int logLevel, const char* format, va_list args)
 	char buffer[509];
 	vsnprintf(buffer + 9, 500, format, args);
 
-	if (doPrintf)
+	if (doPrintf) {
+		#ifdef __ANDROID__
+		android_LogPriority prio;
+		switch (logLevel) {
+		case CAPTURY_LOG_FATAL: prio = ANDROID_LOG_FATAL; break;
+		case CAPTURY_LOG_ERROR: prio = ANDROID_LOG_ERROR; break;
+		case CAPTURY_LOG_WARNING: prio = ANDROID_LOG_WARN; break;
+		case CAPTURY_LOG_IMPORTANT:
+		case CAPTURY_LOG_INFO: prio = ANDROID_LOG_INFO; break;
+		case CAPTURY_LOG_DEBUG: prio = ANDROID_LOG_DEBUG; break;
+		case CAPTURY_LOG_TRACE: prio = ANDROID_LOG_VERBOSE; break;
+		}
+		__android_log_print(prio, "RemoteCaptury", "%s", buffer + 9);
+		#else
 		printf("%s", buffer + 9);
+		#endif
+	}
 	if (logCallback)
 		logCallback(logLevel, buffer + 9, logUserArg);
 
