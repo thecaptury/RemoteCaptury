@@ -2270,7 +2270,7 @@ extern "C" int Captury_disconnect(RemoteCaptury* rc)
 {
 	lockMutex(&rc->connectMutex);
 	rc->disconnect();
-	lockMutex(&rc->connectMutex);
+	unlockMutex(&rc->connectMutex);
 	rc->log("RemoteCaptury disconnected\n");
 	return 1;
 }
