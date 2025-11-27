@@ -269,6 +269,7 @@ struct RemoteCaptury {
 	CRITICAL_SECTION	partialActorMutex;
 	CRITICAL_SECTION	syncMutex;
 	CRITICAL_SECTION	logMutex;
+	CRITICAL_SECTION	connectMutex;
 	bool mutexesInited = false;
 	#else
 	pthread_t	streamThread;
@@ -278,6 +279,7 @@ struct RemoteCaptury {
 	MutexStruct	partialActorMutex;
 	MutexStruct	syncMutex;
 	MutexStruct	logMutex;
+	MutexStruct	connectMutex;
 	#endif
 
 	bool syncLoopIsRunning = false;
@@ -341,7 +343,9 @@ struct RemoteCaptury {
 	CapturyImageCallback imageCallback = NULL;
 	void* imageArg = NULL;
 
-	volatile bool	handshakeFinished = false;
+	volatile bool	receiveThreadRunning = false; // the receive thread has been started
+	volatile bool	isConnected = false; // true when the TCP socket is connected
+	volatile bool	handshakeFinished = false; // TCP socket is connected AND received hello message
 	volatile bool	isStreamThreadRunning = false;
 	SOCKET		sock = (SOCKET)-1;
 
@@ -401,11 +405,12 @@ struct RemoteCaptury {
 	void receivedPose(CapturyPose* pose, int actorId, ActorData* aData, uint64_t timestamp);
 	void receivedPosePacket(CapturyPosePacket* cpp);
 	SOCKET openTcpSocket();
-	bool receive(SOCKET& sok);
+	bool receive();
 	void deleteActors();
 
 	bool connect(const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort, int async, uint32_t localAddress, uint32_t multicastAddress);
 	bool disconnect();
+	void safeCloseSocket();
 
 	int startStreamingImagesAndAngles(int what, int32_t camId, int numAngles, uint16_t* angles);
 	CapturyPose* getCurrentPoseAndTrackingConsistencyForActor(int actorId, int* tc);
@@ -420,6 +425,7 @@ void RemoteCaptury::actualLog(int logLevel, const char* format, va_list args)
 		InitializeCriticalSection(&partialActorMutex);
 		InitializeCriticalSection(&syncMutex);
 		InitializeCriticalSection(&logMutex);
+		InitializeCriticalSection(&connectMutex);
 		mutexesInited = true;
 	}
 	#endif
@@ -1089,6 +1095,7 @@ SOCKET RemoteCaptury::openTcpSocket()
 {
 	log("opening TCP socket\n");
 
+	isConnected = false;
 	sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	if (sock == -1) {
 		log("failed to open socket: %s\n", sockstrerror());
@@ -1110,6 +1117,8 @@ SOCKET RemoteCaptury::openTcpSocket()
 		sock = -1;
 		return (SOCKET)-1;
 	}
+
+	isConnected = true;
 
 	// set read timeout
 	setSocketTimeout(sock, 500);
@@ -1138,9 +1147,18 @@ static bool isSocketErrorTryAgain(int err)
 #endif
 }
 
+void RemoteCaptury::safeCloseSocket()
+{
+	if (isConnected) {
+		closesocket(sock);
+		sock = (SOCKET)-1;
+		isConnected = false;
+	}
+}
+
 // waits for at most 500ms before it fails
 // returns false if there was an error receiving (or a timeout)
-bool RemoteCaptury::receive(SOCKET& sok)
+bool RemoteCaptury::receive()
 {
 	static std::vector<char> buffer(9000);
 	CapturyRequestPacket* p = (CapturyRequestPacket*)buffer.data();
@@ -1148,18 +1166,17 @@ bool RemoteCaptury::receive(SOCKET& sok)
 	{
 		fd_set reader;
 		FD_ZERO(&reader);
-		FD_SET(sok, &reader);
+		FD_SET(sock, &reader);
 
 		struct timeval tv;
 		tv.tv_sec = 0;
 		tv.tv_usec = 500000; // 500ms should be enough
-		int ret = select((int)(sok+1), &reader, NULL, NULL, &tv);
+		int ret = select((int)(sock+1), &reader, NULL, NULL, &tv);
 		if (ret == -1) { // error
 			int err = sockerror();
 			if (isSocketErrorFatal(err)) {
 				// connection closed by peer or network down
-				closesocket(sok);
-				sok = (SOCKET)-1;
+				safeCloseSocket();
 			}
 			log("error waiting for socket: %s\n", sockstrerror(err));
 			return false;
@@ -1171,32 +1188,29 @@ bool RemoteCaptury::receive(SOCKET& sok)
 		{
 			struct sockaddr_in thisEnd;
 			socklen_t len = sizeof(thisEnd);
- 			getsockname(sok, (sockaddr*) &thisEnd, &len);
+ 			getsockname(sock, (sockaddr*) &thisEnd, &len);
 		}
 
 		// first peek to find out which packet type this is
-		int size = recv(sok, buffer.data(), sizeof(CapturyRequestPacket), 0);
+		int size = recv(sock, buffer.data(), sizeof(CapturyRequestPacket), 0);
 		if (size == 0) { // the other end shut down the socket...
-			log("socket shut down by other end %s\n", sockstrerror());
-			closesocket(sok);
-			sok = (SOCKET)-1;
+			log("receive: socket shut down by other end %s\n", sockstrerror());
+			safeCloseSocket();
 			return false;
 		}
 		if (size == -1) { // error
 			int err = sockerror();
-			log("socket error %s\n", sockstrerror(err));
+			log("receive: socket error sock=%d %s\n", sock, sockstrerror(err));
 			if (isSocketErrorFatal(err)) {
-				closesocket(sok);
-				sok = (SOCKET)-1;
+				safeCloseSocket();
 			}
 			return false;
 		}
 
 		if (p->size > (int)sizeof(CapturyRequestPacket)) {
 			if (p->size > 10000000) {
-				log("invalid packet size: %d. closing connection.", p->size);
-				closesocket(sok);
-				sok = (SOCKET)-1;
+				log("receive: invalid packet size: %d. closing connection.\n", p->size);
+				safeCloseSocket();
 				return false;
 			}
 
@@ -1207,19 +1221,17 @@ bool RemoteCaptury::receive(SOCKET& sok)
 			}
 			int toGet = p->size - at;
 			while (toGet > 0) {
-				size = recv(sok, &buffer[at], toGet, 0);
+				size = recv(sock, &buffer[at], toGet, 0);
 				if (size == 0) { // the other end shut down the socket...
 					log("socket shut down by other end: %s\n", sockstrerror());
-					closesocket(sok);
-					sok = (SOCKET)-1;
+					safeCloseSocket();
 					return false;
 				}
 				if (size == -1) { // error
 					int err = sockerror();
 					log("socket error: %s\n", sockstrerror(err));
 					if (isSocketErrorFatal(err)) {
-						closesocket(sok);
-						sok = (SOCKET)-1;
+						safeCloseSocket();
 					}
 					return false;
 				}
@@ -1494,7 +1506,7 @@ bool RemoteCaptury::receive(SOCKET& sok)
 		case capturyTime2: {
 			CapturyTimePacket2* tp = (CapturyTimePacket2*)p;
 			if (tp->timeId != nextTimeId) {
-				log("time id doesn't match, expected %d got %d", nextTimeId, tp->timeId);
+				log("time id doesn't match, expected %d got %d\n", nextTimeId, tp->timeId);
 				p->type = capturyError;
 				break;
 			}
@@ -1602,7 +1614,7 @@ bool RemoteCaptury::receive(SOCKET& sok)
 		case capturyCustomAck:
 			break; // all good
 		default:
-			log("unrecognized packet: %d bytes, type %d, size %d", size, p->type, p->size);
+			log("unrecognized packet: %d bytes, type %d, size %d\n", size, p->type, p->size);
 			break;
 		}
 
@@ -1645,6 +1657,7 @@ void RemoteCaptury::deleteActors()
 	}
 	actorData.clear();
 	unlockMutex(&mutex);
+	log("deleted actors: %d callbacks\n", (int)deletedActorIds.size());
 
 	for (int id : deletedActorIds)
 		actorChangedCallback(this, id, ACTOR_DELETED, actorChangedArg);
@@ -1669,7 +1682,7 @@ void* RemoteCaptury::receiveLoop()
 	bool handshaking = !handshakeFinished;
 	log("starting receive loop sock=%d handshaking=%d handshakeFinished=%d\n", sock, handshaking, handshakeFinished);
 	while (!stopReceiving && (!handshaking || !handshakeFinished)) {
-		if (sock == -1 || !receive(sock)) {
+		if (sock == -1 || !receive()) {
 			if (sock == -1) {
 				deleteActors();
 				cameras.clear();
@@ -1687,8 +1700,10 @@ void* RemoteCaptury::receiveLoop()
 					void* retVal;
 					pthread_join(streamThread, &retVal);
 					#endif
-					if (handshaking && getTime() > handshakeStart + 1000000)
+					if (handshaking && getTime() > handshakeStart + 1000000) {
+						receiveThreadRunning = false;
 						return 0;
+					}
 				}
 
 				while (!stopReceiving) {
@@ -1697,8 +1712,10 @@ void* RemoteCaptury::receiveLoop()
 						break;
 
 					sleepMicroSeconds(100000);
-					if (handshaking && getTime() > handshakeStart + 1000000)
+					if (handshaking && getTime() > handshakeStart + 1000000) {
+						receiveThreadRunning = false;
 						return 0;
+					}
 				}
 
 				if (streamWhat != CAPTURY_STREAM_NOTHING)
@@ -1708,9 +1725,11 @@ void* RemoteCaptury::receiveLoop()
 			}
 		}
 		if (handshaking && getTime() > handshakeStart + 1000000)
-			return 0;
+			break;
 	}
 	log("stopping receive loop\n");
+
+	receiveThreadRunning = false;
 
 	return 0;
 }
@@ -1858,7 +1877,7 @@ void* RemoteCaptury::streamLoop(CapturyStreamPacketTcp* packet)
 				if (err == 0) {
 					u_long read;
 					ioctlsocket(streamSock, FIONREAD, &read); // returns fill status of socket buffer...
-					log("socket filled %.1f%%", (read * 100.0f) / sockBufSize);
+					log("socket filled %.1f%%\n", (read * 100.0f) / sockBufSize);
 				}
 				#endif
 
@@ -2178,9 +2197,11 @@ bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short 
 		InitializeCriticalSection(&partialActorMutex);
 		InitializeCriticalSection(&syncMutex);
 		InitializeCriticalSection(&logMutex);
+		InitializeCriticalSection(&connectMutex);
 		mutexesInited = true;
 	}
 #endif
+	lockMutex(&connectMutex);
 
 	struct in_addr addr;
 #ifdef _WIN32
@@ -2190,10 +2211,10 @@ bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short 
 		return 0;
 #endif
 
-	if (sock != -1)
+	if (sock != -1 || receiveThreadRunning)
 		disconnect();
 
-	log("RemoteCaptury: connecting %s to %s:%d, sock=%d", async ? "async" : "blocking", ip, port, sock);
+	log("RemoteCaptury: connecting %s to %s:%d, sock=%d\n", async ? "async" : "blocking", ip, port, sock);
 
 	localAddress.sin_family = AF_INET;
 	localAddress.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -2222,34 +2243,41 @@ bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short 
 			}
 #endif
 
-			if (openTcpSocket() == -1)
+			if (openTcpSocket() == -1) {
+				unlockMutex(&connectMutex);
 				return 0;
+			}
 		}
 
 		receiveLoop(); // block until handshake is finished
 
-		log("RemoteCaptury: going async now: sock=%d, handshakeFinished: %d", sock, handshakeFinished);
+		log("RemoteCaptury: going async now: sock=%d, handshakeFinished: %d\n", sock, handshakeFinished);
 	}
 
+	receiveThreadRunning = true;
 #ifdef _WIN32
 	receiveThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)::receiveLoop, this, 0, NULL);
 #else
 	pthread_create(&receiveThread, NULL, ::receiveLoop, this);
 #endif
 
+	unlockMutex(&connectMutex);
 	return 1;
 }
 
 // returns 1 if successful, 0 otherwise
 extern "C" int Captury_disconnect(RemoteCaptury* rc)
 {
+	lockMutex(&rc->connectMutex); rc-
 	rc->disconnect();
+	lockMutex(&rc->connectMutex); rc->lockedAt = -rc->lockedAt;
+	rc->log("RemoteCaptury disconnected\n");
 	return 1;
 }
 
 bool RemoteCaptury::disconnect()
 {
-	log("RemoteCaptury::disconnect sock=%d, stopReceiving=%d", sock, stopReceiving);
+	log("RemoteCaptury::disconnect sock=%d, stopReceiving=%d, handshakeFinished=%d\n", sock, stopReceiving, handshakeFinished);
 	bool closedOrStopped = false;
 
 	if (!stopReceiving) {
@@ -2257,30 +2285,31 @@ bool RemoteCaptury::disconnect()
 		stopReceiving = 1;
 		stopStreamThread = 1;
 
-		// close the TCP socket to prevent a looong wait on disconnect
-		closesocket(sock);
+		// close the TCP socket if it is stalled in connect
+		// to prevent a looong wait
+		if (!isConnected && sock != -1) {
+			log("RemoteCaptury::disconnect closing socket sock=%d\n", sock);
+			isConnected = false;
+			closesocket(sock);
+			sock = (SOCKET)-1;
+			closedOrStopped = true;
+		}
 
 		#ifdef _WIN32
 
 		if (receiveThread != INVALID_HANDLE_VALUE) {
 			if (WaitForSingleObject(receiveThread, 10000) != WAIT_OBJECT_0)
-				log("RemoteCaptury::disconnect() warning: receiveThread termination failed!");
+				log("RemoteCaptury::disconnect() warning: receiveThread termination failed!\n");
 			CloseHandle(receiveThread);
 			receiveThread = INVALID_HANDLE_VALUE;
 		}
 
 		if (isStreamThreadRunning && streamThread != INVALID_HANDLE_VALUE) {
 			if (WaitForSingleObject(streamThread, 10000) != WAIT_OBJECT_0)
-				log("RemoteCaptury:disconnect() warning: streamThread termination failed!");
+				log("RemoteCaptury:disconnect() warning: streamThread termination failed!\n");
 			CloseHandle(streamThread);
 			streamThread = INVALID_HANDLE_VALUE;
 		}
-
-		if (wsaInited) {
-			WSACleanup();
-			wsaInited = false;
-		}
-
 
 		#else
 		void* retVal;
@@ -2292,6 +2321,8 @@ bool RemoteCaptury::disconnect()
 	}
 
 	if (sock != -1) {
+		log("RemoteCaptury::disconnect closing socket at last sock=%d\n", sock);
+		isConnected = false;
 		closesocket(sock);
 		sock = (SOCKET)-1;
 		closedOrStopped = true;
