@@ -2288,7 +2288,7 @@ extern "C" int Captury_disconnect(RemoteCaptury* rc)
 
 bool RemoteCaptury::disconnect()
 {
-	log("RemoteCaptury::disconnect sock=%d, stopReceiving=%d, handshakeFinished=%d, isConnected=%d, receiveThreadJoined=%d\n", sock, stopReceiving, handshakeFinished, isConnected, receiveThreadJoined);
+	log("RemoteCaptury::disconnect sock=%d, stopReceiving=%d, handshakeFinished=%d, isConnected=%d\n", sock, stopReceiving, handshakeFinished, isConnected);
 	bool closedOrStopped = false;
 
 	if (!stopReceiving) {
