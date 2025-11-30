@@ -2,6 +2,7 @@
 #include "RemoteCaptury.h"
 
 #include <algorithm>
+#include <atomic>
 #include <string>
 #include <vector>
 #include <map>
@@ -273,9 +274,9 @@ struct RemoteCaptury {
 	bool mutexesInited = false;
 	#else
 	pthread_t	streamThread;
-	bool		streamThreadJoined = true;
+	std::atomic_flag streamThreadJoined = ATOMIC_FLAG_INIT;
 	pthread_t	receiveThread;
-	bool		receiveThreadJoined = true;
+	std::atomic_flag receiveThreadJoined = ATOMIC_FLAG_INIT;
 	pthread_t	syncThread;
 	MutexStruct	mutex;
 	MutexStruct	partialActorMutex;
@@ -346,8 +347,7 @@ struct RemoteCaptury {
 	void* imageArg = NULL;
 
 	volatile bool	receiveThreadRunning = false; // the receive thread has been started
-	volatile bool	isConnected = false; // true when the TCP socket is connected
-	volatile bool	handshakeFinished = false; // TCP socket is connected AND received hello message
+	std::atomic<bool> isConnected { false };    // true when the TCP socket is connected
 	volatile bool	isStreamThreadRunning = false;
 	SOCKET		sock = (SOCKET)-1;
 
@@ -1097,6 +1097,14 @@ SOCKET RemoteCaptury::openTcpSocket()
 {
 	log("opening TCP socket\n");
 
+#ifdef _WIN32
+	if (!wsaInited) {
+		WSADATA init;
+		WSAStartup(WINSOCK_VERSION, &init);
+		wsaInited = true;
+	}
+#endif
+
 	isConnected = false;
 	sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	if (sock == -1) {
@@ -1151,10 +1159,10 @@ static bool isSocketErrorTryAgain(int err)
 
 void RemoteCaptury::safeCloseSocket()
 {
-	if (isConnected) {
+	bool expected = true;
+	if (isConnected.compare_exchange_strong(expected, false)) {
 		closesocket(sock);
 		sock = (SOCKET)-1;
-		isConnected = false;
 	}
 }
 
@@ -1246,7 +1254,6 @@ bool RemoteCaptury::receive(std::vector<char>& buffer)
 
 		switch (p->type) {
 		case capturyHello:
-			handshakeFinished = true;
 			break;
 		case capturyActors: {
 			CapturyActorsPacket* cap = (CapturyActorsPacket*)p;
@@ -1683,10 +1690,8 @@ void* RemoteCaptury::receiveLoop()
 {
 	std::vector<char> buffer(9000);
 
-	uint64_t handshakeStart = getTime();
-	bool handshaking = !handshakeFinished;
-	log("starting receive loop sock=%d handshaking=%d handshakeFinished=%d\n", sock, handshaking, handshakeFinished);
-	while (!stopReceiving && (!handshaking || !handshakeFinished)) {
+	log("starting receive loop sock=%d\n", sock);
+	while (!stopReceiving) {
 		if (sock == -1 || !receive(buffer)) {
 			if (sock == -1) {
 				deleteActors();
@@ -1703,15 +1708,10 @@ void* RemoteCaptury::receiveLoop()
 					}
 					#else
 					void* retVal;
-					if (!streamThreadJoined) {
+					if (!streamThreadJoined.test_and_set()) {
 						pthread_join(streamThread, &retVal);
-						streamThreadJoined = true;
 					}
 					#endif
-					if (handshaking && getTime() > handshakeStart + 1000000) {
-						receiveThreadRunning = false;
-						return 0;
-					}
 				}
 
 				while (!stopReceiving) {
@@ -1720,20 +1720,12 @@ void* RemoteCaptury::receiveLoop()
 						break;
 
 					sleepMicroSeconds(100000);
-					if (handshaking && getTime() > handshakeStart + 1000000) {
-						receiveThreadRunning = false;
-						return 0;
-					}
 				}
 
-				if (streamWhat != CAPTURY_STREAM_NOTHING)
+				if (!stopReceiving && streamWhat != CAPTURY_STREAM_NOTHING)
 					Captury_startStreamingImagesAndAngles(this, streamWhat, streamCamera, (int)streamAngles.size(), streamAngles.data());
-
-				handshaking = false; // this is a lie but makes it go into the normal loop
 			}
 		}
-		if (handshaking && getTime() > handshakeStart + 1000000)
-			break;
 	}
 	log("stopping receive loop\n");
 
@@ -2221,7 +2213,7 @@ bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short 
 	}
 #endif
 
-	if (sock != -1 || receiveThreadRunning)
+	if (receiveThreadRunning)
 		disconnect();
 
 	log("RemoteCaptury: connecting %s to %s:%d, sock=%d\n", async ? "async" : "blocking", ip, port, sock);
@@ -2240,35 +2232,26 @@ bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short 
 	remoteAddress.sin_addr = addr;
 	remoteAddress.sin_port = htons(port);
 
-	handshakeFinished = false;
 	stopReceiving = 0;
 
 	if (async == 0) {
-		if (sock == -1) {
-#ifdef _WIN32
-			if (!wsaInited) {
-				WSADATA init;
-				WSAStartup(WINSOCK_VERSION, &init);
-				wsaInited = true;
-			}
-#endif
-
-			if (openTcpSocket() == -1) {
-				unlockMutex(&connectMutex);
-				return 0;
-			}
+		if (openTcpSocket() == -1) {
+			unlockMutex(&connectMutex);
+			return 0;
 		}
 
-		receiveLoop(); // block until handshake is finished
+		// TCP is connected here
+		if (streamWhat != CAPTURY_STREAM_NOTHING)
+			Captury_startStreamingImagesAndAngles(this, streamWhat, streamCamera, (int)streamAngles.size(), streamAngles.data());
 
-		log("RemoteCaptury: going async now: sock=%d, handshakeFinished: %d\n", sock, handshakeFinished);
+		log("RemoteCaptury: going async now: sock=%d\n", sock);
 	}
 
 	receiveThreadRunning = true;
 #ifdef _WIN32
 	receiveThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)::receiveLoop, this, 0, NULL);
 #else
-	receiveThreadJoined = false;
+	receiveThreadJoined.clear();
 	pthread_create(&receiveThread, NULL, ::receiveLoop, this);
 #endif
 
@@ -2288,11 +2271,10 @@ extern "C" int Captury_disconnect(RemoteCaptury* rc)
 
 bool RemoteCaptury::disconnect()
 {
-	log("RemoteCaptury::disconnect sock=%d, stopReceiving=%d, handshakeFinished=%d, isConnected=%d\n", sock, stopReceiving, handshakeFinished, isConnected);
+	log("RemoteCaptury::disconnect sock=%d, stopReceiving=%d, isConnected=%d\n", sock, stopReceiving, isConnected.load());
 	bool closedOrStopped = false;
 
 	if (!stopReceiving) {
-		handshakeFinished = false;
 		stopReceiving = 1;
 		stopStreamThread = 1;
 
@@ -2300,14 +2282,12 @@ bool RemoteCaptury::disconnect()
 		// to prevent a looong wait
 		if (!isConnected && sock != -1) {
 			log("RemoteCaptury::disconnect closing socket sock=%d\n", sock);
-			isConnected = false;
 			closesocket(sock);
 			sock = (SOCKET)-1;
 			closedOrStopped = true;
 		}
 
 		#ifdef _WIN32
-
 		if (receiveThread != INVALID_HANDLE_VALUE) {
 			if (WaitForSingleObject(receiveThread, 10000) != WAIT_OBJECT_0)
 				log("RemoteCaptury::disconnect() warning: receiveThread termination failed!\n");
@@ -2324,13 +2304,11 @@ bool RemoteCaptury::disconnect()
 
 		#else
 		void* retVal;
-		if (!receiveThreadJoined) {
+		if (!receiveThreadJoined.test_and_set()) {
 			pthread_join(receiveThread, &retVal);
-			receiveThreadJoined = true;
 		}
-		if (!streamThreadJoined) {
+		if (!streamThreadJoined.test_and_set()) {
 			pthread_join(streamThread, &retVal);
-			streamThreadJoined = true;
 		}
 		#endif
 
@@ -2354,9 +2332,9 @@ bool RemoteCaptury::disconnect()
 // returns 1 if successful, 0 otherwise
 extern "C" int Captury_getConnectionStatus(RemoteCaptury* rc)
 {
-	if (rc->sock == -1)
+	if (!rc->receiveThreadRunning)
 		return CAPTURY_DISCONNECTED;
-	return (rc->handshakeFinished && rc->stopReceiving == 0) ? CAPTURY_CONNECTED : CAPTURY_CONNECTING;
+	return (rc->isConnected) ? CAPTURY_CONNECTED : CAPTURY_CONNECTING;
 }
 
 // returns the current number of actors
@@ -2554,7 +2532,7 @@ int RemoteCaptury::startStreamingImagesAndAngles(int what, int32_t camId, int nu
 #ifdef _WIN32
 	streamThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)::streamLoop, rec, 0, NULL);
 #else
-	streamThreadJoined = false;
+	streamThreadJoined.clear();
 	pthread_create(&streamThread, NULL, ::streamLoop, rec);
 #endif
 
@@ -2578,9 +2556,8 @@ extern "C" int Captury_stopStreaming(RemoteCaptury* rc, int wait)
 		}
 #else
 		void* retVal;
-		if (!rc->streamThreadJoined) {
+		if (!rc->streamThreadJoined.test_and_set()) {
 			pthread_join(rc->streamThread, &retVal);
-			rc->streamThreadJoined = true;
 		}
 #endif
 	}
