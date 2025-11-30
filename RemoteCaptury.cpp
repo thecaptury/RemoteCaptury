@@ -112,7 +112,7 @@ typedef uint32_t uint;
 #ifdef _WIN32
 
 #define socklen_t int
-#define sleepMicroSeconds(us) Sleep(us / 1000)
+#define sleepMicroSeconds(us) Sleep((DWORD)(us) / 1000)
 
 static inline int sockerror()		{ return WSAGetLastError(); }
 static inline const char* sockstrerror(int err) { static char msg[200]; FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM, nullptr, err, MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL), msg, sizeof(msg), nullptr); return msg; }
@@ -406,7 +406,7 @@ struct RemoteCaptury {
 	#endif
 	void receivedPose(CapturyPose* pose, int actorId, ActorData* aData, uint64_t timestamp);
 	void receivedPosePacket(CapturyPosePacket* cpp);
-	SOCKET openTcpSocket();
+	bool openTcpSocket();
 	bool receive(std::vector<char>& buffer);
 	void deleteActors();
 
@@ -1093,9 +1093,9 @@ void RemoteCaptury::receivedPosePacket(CapturyPosePacket* cpp)
 	unlockMutex(&mutex);
 }
 
-SOCKET RemoteCaptury::openTcpSocket()
+bool RemoteCaptury::openTcpSocket()
 {
-	log("opening TCP socket\n");
+	log("opening TCP socket streamWhat=%d\n", streamWhat);
 
 #ifdef _WIN32
 	if (!wsaInited) {
@@ -1109,23 +1109,23 @@ SOCKET RemoteCaptury::openTcpSocket()
 	sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	if (sock == -1) {
 		log("failed to open socket: %s\n", sockstrerror());
-		return (SOCKET)-1;
+		return false;
 	}
 
 	if (localAddress.sin_port != 0 && bind(sock, (sockaddr*) &localAddress, sizeof(localAddress)) != 0) {
 		char buf[100];
 		log("failed to bind to %s:%d: %s\n", inet_ntop(AF_INET, &localAddress.sin_addr, buf, 100), ntohs(localAddress.sin_port), sockstrerror());
 		closesocket(sock);
-		sock = -1;
-		return (SOCKET)-1;
+		sock = (SOCKET)-1;
+		return false;
 	}
 
 	if (::connect(sock, (sockaddr*) &remoteAddress, sizeof(remoteAddress)) != 0) {
 		char buf[100];
 		log("failed to connect to %s:%d: %s\n", inet_ntop(AF_INET, &remoteAddress.sin_addr, buf, 100), ntohs(remoteAddress.sin_port), sockstrerror());
 		closesocket(sock);
-		sock = -1;
-		return (SOCKET)-1;
+		sock = (SOCKET)-1;
+		return false;
 	}
 
 	isConnected = true;
@@ -1136,7 +1136,10 @@ SOCKET RemoteCaptury::openTcpSocket()
 	char buf[100];
 	log("connected to %s:%d\n", inet_ntop(AF_INET, &remoteAddress.sin_addr, buf, 100), ntohs(remoteAddress.sin_port));
 
-	return sock;
+	if (streamWhat != CAPTURY_STREAM_NOTHING)
+		Captury_startStreamingImagesAndAngles(this, streamWhat, streamCamera, (int)streamAngles.size(), streamAngles.data());
+
+	return true;
 }
 
 static bool isSocketErrorFatal(int err)
@@ -1715,15 +1718,16 @@ void* RemoteCaptury::receiveLoop()
 				}
 
 				while (!stopReceiving) {
-					openTcpSocket();
-					if (sock != -1)
+					uint64_t tBefore = getTime();
+					if (openTcpSocket())
 						break;
 
-					sleepMicroSeconds(100000);
-				}
+					uint64_t tAfter = getTime();
+					if (tAfter - tBefore >= 1000000)
+						continue;
 
-				if (!stopReceiving && streamWhat != CAPTURY_STREAM_NOTHING)
-					Captury_startStreamingImagesAndAngles(this, streamWhat, streamCamera, (int)streamAngles.size(), streamAngles.data());
+					sleepMicroSeconds(1000000 - (tAfter - tBefore));
+				}
 			}
 		}
 	}
@@ -2235,14 +2239,10 @@ bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short 
 	stopReceiving = 0;
 
 	if (async == 0) {
-		if (openTcpSocket() == -1) {
+		if (!openTcpSocket()) {
 			unlockMutex(&connectMutex);
 			return 0;
 		}
-
-		// TCP is connected here
-		if (streamWhat != CAPTURY_STREAM_NOTHING)
-			Captury_startStreamingImagesAndAngles(this, streamWhat, streamCamera, (int)streamAngles.size(), streamAngles.data());
 
 		log("RemoteCaptury: going async now: sock=%d\n", sock);
 	}
