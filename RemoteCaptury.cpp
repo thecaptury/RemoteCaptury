@@ -2547,6 +2547,8 @@ extern "C" int Captury_stopStreaming(RemoteCaptury* rc, int wait)
 
 	rc->stopStreamThread = 1;
 
+	rc->streamWhat = CAPTURY_STREAM_NOTHING;
+
 	if (wait) {
 #ifdef _WIN32
 		if (rc->streamThread != INVALID_HANDLE_VALUE) {
