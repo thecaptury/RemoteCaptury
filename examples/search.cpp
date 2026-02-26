@@ -1,6 +1,9 @@
 #include <stdio.h>
 #include "RemoteCaptury.h"
-#ifndef _WIN32
+
+#ifdef _WIN32
+#include <Windows.h>
+#else
 #include <unistd.h>
 #endif
 
