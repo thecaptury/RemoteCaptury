@@ -41,7 +41,7 @@ CAPTURY_DLL_EXPORT int Captury_disconnect(RemoteCaptury* rc);
 
 #define CAPTURY_DISCONNECTED			0 // not connected
 #define CAPTURY_CONNECTING			1 // trying to connect
-#define CAPTURY_CONNECTED			2 // not connected
+#define CAPTURY_CONNECTED			2 // connected
 // returns one of the above
 CAPTURY_DLL_EXPORT int Captury_getConnectionStatus(RemoteCaptury* rc);
 
