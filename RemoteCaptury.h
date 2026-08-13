@@ -34,7 +34,7 @@ CAPTURY_DLL_EXPORT int Captury_connect(RemoteCaptury* rc, const char* ip, unsign
 // use 0 for the multicast address if you don't want multicast use htonl(inet_addr("239.255.210.1")) if you do want multicast or CAPTURY_MULTICAST_ADDR
 // in most setups you need to specify both localAddress and multicastAddress for multicast to work
 #define CAPTURY_MULTICAST_ADDR 0x01d2ffef
-CAPTURY_DLL_EXPORT int Captury_connect2(RemoteCaptury* rc, const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort, int async, uint32_t localAddress, uint32_t multicastAddress);
+CAPTURY_DLL_EXPORT int Captury_connect2(RemoteCaptury* rc, const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort, int async, const char* localAddress, const char* multicastAddress);
 
 // returns 1 if successful, 0 otherwise
 CAPTURY_DLL_EXPORT int Captury_disconnect(RemoteCaptury* rc);
@@ -421,6 +421,8 @@ typedef enum { capturyActors = 1, capturyActor = 2,
 	       capturyFramerate = 79,
 	       capturyBoneTypes = 80,
 	       capturyActorMetaData = 81,
+	       capturyDiscovery = 82,
+	       capturyReveal = 83,
 	       capturyError = 0 } CapturyPacketTypes;
 
 // returns a string for nicer error messages
@@ -919,6 +921,15 @@ struct CapturyBoneTypePacket {
 
 	int32_t		actorId;
 	uint8_t		boneTypes[];
+};
+
+// sent to client
+struct CapturyRevealPacket {
+	int32_t		type;	// capturyBoneTypes
+	int32_t		size;	// size of full message including type and size
+
+	uint16_t	udpPort;
+	uint16_t	tcpPort;
 };
 
 #pragma pack(pop)

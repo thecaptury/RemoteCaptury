@@ -410,7 +410,7 @@ struct RemoteCaptury {
 	bool receive(std::vector<char>& buffer);
 	void deleteActors();
 
-	bool connect(const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort, int async, uint32_t localAddress, uint32_t multicastAddress);
+	bool connect(const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort, int async, const char* localAddress, const char* multicastAddress);
 	bool disconnect();
 	void safeCloseSocket();
 
@@ -685,6 +685,10 @@ const char* Captury_getHumanReadableMessageType(CapturyPacketTypes type)
 		return "<bone types>";
 	case capturyActorMetaData:
 		return "<actor meta data>";
+	case capturyDiscovery:
+		return "<discovery>";
+	case capturyReveal:
+		return "<reveal>";
 	}
 	return "<unknown message type>";
 }
@@ -1620,6 +1624,8 @@ bool RemoteCaptury::receive(std::vector<char>& buffer)
 				actorData[amc->actor].status = (CapturyActorStatus)amc->mode;
 			unlockMutex(&mutex);
 			break; }
+		case capturyReveal:
+			break;
 		case capturyStreamAck:
 		case capturySetShotAck:
 		case capturyStartRecordingAck:
@@ -2188,12 +2194,12 @@ extern "C" int Captury_connect(RemoteCaptury* rc, const char* ip, unsigned short
 }
 
 // returns 1 if successful, 0 otherwise
-extern "C" int Captury_connect2(RemoteCaptury* rc, const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort, int async, uint32_t localAddress, uint32_t multicastAddress)
+extern "C" int Captury_connect2(RemoteCaptury* rc, const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort, int async, const char* localAddress, const char* multicastAddress)
 {
 	return rc->connect(ip, port, localPort, localStreamPort, async, localAddress, multicastAddress);
 }
 
-bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort, int async, uint32_t localAddr, uint32_t multicastAddr)
+bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort, int async, const char* localAddr, const char* multicastAddr)
 {
 #ifdef _WIN32
 	if (!mutexesInited) {
@@ -2207,41 +2213,82 @@ bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short 
 #endif
 	lockMutex(&connectMutex);
 
-	struct in_addr addr;
-#ifdef _WIN32
-	addr.S_un.S_addr = inet_addr(ip);
-#else
-	if (!inet_pton(AF_INET, ip, &addr)) {
-		unlockMutex(&connectMutex);
-		return 0;
-	}
-#endif
-
 	if (receiveThreadRunning)
 		disconnect();
 
-	log("RemoteCaptury: connecting %s to %s:%d, sock=%d\n", async ? "async" : "blocking", ip, port, sock);
-
 	localAddress.sin_family = AF_INET;
-	localAddress.sin_addr.s_addr = htonl(INADDR_ANY);
+	localAddress.sin_addr.s_addr = INADDR_ANY;
 	localAddress.sin_port = htons(localPort);
 
 	localStreamAddress.sin_family = AF_INET;
-	localStreamAddress.sin_addr.s_addr = htonl(localAddr);
+	if (localAddr && *localAddr && inet_pton(AF_INET, localAddr, &localStreamAddress.sin_addr.s_addr) <= 0)
+		localStreamAddress.sin_addr.s_addr = INADDR_ANY;
 	localStreamAddress.sin_port = htons(localStreamPort);
 
-	multicastAddress = htonl(multicastAddr);
-
 	remoteAddress.sin_family = AF_INET;
-	remoteAddress.sin_addr = addr;
-	remoteAddress.sin_port = htons(port);
+
+	if (ip == nullptr || *ip == '\0') {
+		if (multicastAddr == nullptr || *multicastAddr == '\0')
+			multicastAddr = "239.255.210.1";
+		if (inet_pton(AF_INET, multicastAddr, &multicastAddress) <= 0) {
+			log("RemoteCaptury: cannot connect: failed to convert multicast address %s\n", multicastAddr);
+			return false;
+		}
+		SOCKET discoverSock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+		setSocketTimeout(discoverSock, 300);
+		if (localStreamAddress.sin_addr.s_addr != INADDR_ANY)
+			setsockopt(discoverSock, IPPROTO_IP, IP_MULTICAST_IF, &localStreamAddress.sin_addr.s_addr, sizeof(localStreamAddress.sin_addr.s_addr));
+		CapturyRequestPacket pkt;
+		pkt.size = sizeof(pkt);
+		pkt.type = capturyDiscovery;
+		sockaddr_in multiAddr;
+		multiAddr.sin_family = AF_INET;
+		multiAddr.sin_port = htons(port+1);
+		multiAddr.sin_addr.s_addr = multicastAddress;
+		if (sendto(discoverSock, (const char*)&pkt, sizeof(pkt), 0, (const sockaddr*)&multiAddr, sizeof(multiAddr)) != sizeof(pkt)) {
+			unlockMutex(&connectMutex);
+			log("RemoteCaptury: cannot connect. failed to send discovery: %d: %s\n", errno, strerror(errno));
+			return false;
+		}
+		log("RemoteCaptury: %s discovering servers on %s:%d, sock=%d\n", async ? "async" : "blocking", multicastAddr, port+1, discoverSock);
+
+		CapturyRevealPacket reveal;
+		sockaddr_in senderAddr;
+		socklen_t addrSize = sizeof(senderAddr);
+		if (recvfrom(discoverSock, &reveal, sizeof(reveal), 0, (sockaddr*)&senderAddr, &addrSize) == sizeof(reveal)) {
+			remoteAddress.sin_addr = senderAddr.sin_addr;
+			remoteAddress.sin_port = htons(reveal.tcpPort);
+			log("RemoteCaptury: discovered server at %s:%d\n", inet_ntoa(senderAddr.sin_addr), reveal.tcpPort);
+		} else {
+			unlockMutex(&connectMutex);
+			closesocket(discoverSock);
+			log("RemoteCaptury: cannot connect. no server was discovered: %d: %s\n", errno, strerror(errno));
+			return false;
+		}
+
+		closesocket(discoverSock);
+	} else {
+		struct in_addr addr;
+		#ifdef _WIN32
+		addr.S_un.S_addr = inet_addr(ip);
+		#else
+		if (!inet_pton(AF_INET, ip, &addr)) {
+			unlockMutex(&connectMutex);
+			return 0;
+		}
+		#endif
+
+		remoteAddress.sin_addr = addr;
+		remoteAddress.sin_port = htons(port);
+		log("RemoteCaptury: connecting %s to %s:%d, sock=%d\n", async ? "async" : "blocking", ip, port, sock);
+	}
 
 	stopReceiving = 0;
 
 	if (async == 0) {
 		if (!openTcpSocket()) {
 			unlockMutex(&connectMutex);
-			return 0;
+			return false;
 		}
 
 		log("RemoteCaptury: going async now: sock=%d\n", sock);
@@ -2256,7 +2303,7 @@ bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short 
 #endif
 
 	unlockMutex(&connectMutex);
-	return 1;
+	return true;
 }
 
 // returns 1 if successful, 0 otherwise
