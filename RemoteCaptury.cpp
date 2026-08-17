@@ -2190,7 +2190,7 @@ extern "C" int Captury_destroy(RemoteCaptury* rc)
 
 extern "C" int Captury_connect(RemoteCaptury* rc, const char* ip, unsigned short port)
 {
-	return rc->connect(ip, port, 0, 0, 0, INADDR_ANY, INADDR_ANY);
+	return rc->connect(ip, port, 0, 0, 0, "", "");
 }
 
 // returns 1 if successful, 0 otherwise
