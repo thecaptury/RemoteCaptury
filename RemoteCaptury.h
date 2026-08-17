@@ -31,9 +31,9 @@ CAPTURY_DLL_EXPORT int Captury_connect(RemoteCaptury* rc, const char* ip, unsign
 // in case you need to set the local port because of firewalls, etc.
 // use 0 for localPort and localStreamPort if you don't care
 // if async != 0, the function will return immediately and perform the connection attempt asynchronously
-// use 0 for the multicast address if you don't want multicast use htonl(inet_addr("239.255.210.1")) if you do want multicast or CAPTURY_MULTICAST_ADDR
+// use 0 for the multicast address if you don't want multicast use "239.255.210.1" if you do want multicast or CAPTURY_MULTICAST_ADDR
 // in most setups you need to specify both localAddress and multicastAddress for multicast to work
-#define CAPTURY_MULTICAST_ADDR 0x01d2ffef
+#define CAPTURY_MULTICAST_ADDR "239.255.210.1"
 CAPTURY_DLL_EXPORT int Captury_connect2(RemoteCaptury* rc, const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort, int async, const char* localAddress, const char* multicastAddress);
 
 // returns 1 if successful, 0 otherwise

@@ -2229,7 +2229,7 @@ bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short 
 
 	if (ip == nullptr || *ip == '\0') {
 		if (multicastAddr == nullptr || *multicastAddr == '\0')
-			multicastAddr = "239.255.210.1";
+			multicastAddr = CAPTURY_MULTICAST_ADDR;
 		if (inet_pton(AF_INET, multicastAddr, &multicastAddress) <= 0) {
 			log("RemoteCaptury: cannot connect: failed to convert multicast address %s\n", multicastAddr);
 			return false;
