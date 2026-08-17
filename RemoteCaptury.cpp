@@ -2237,7 +2237,7 @@ bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short 
 		SOCKET discoverSock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 		setSocketTimeout(discoverSock, 300);
 		if (localStreamAddress.sin_addr.s_addr != INADDR_ANY)
-			setsockopt(discoverSock, IPPROTO_IP, IP_MULTICAST_IF, &localStreamAddress.sin_addr.s_addr, sizeof(localStreamAddress.sin_addr.s_addr));
+			setsockopt(discoverSock, IPPROTO_IP, IP_MULTICAST_IF, (const char*)&localStreamAddress.sin_addr.s_addr, sizeof(localStreamAddress.sin_addr.s_addr));
 		CapturyRequestPacket pkt;
 		pkt.size = sizeof(pkt);
 		pkt.type = capturyDiscovery;
@@ -2255,7 +2255,7 @@ bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short 
 		CapturyRevealPacket reveal;
 		sockaddr_in senderAddr;
 		socklen_t addrSize = sizeof(senderAddr);
-		if (recvfrom(discoverSock, &reveal, sizeof(reveal), 0, (sockaddr*)&senderAddr, &addrSize) == sizeof(reveal)) {
+		if (recvfrom(discoverSock, (char*)&reveal, sizeof(reveal), 0, (sockaddr*)&senderAddr, &addrSize) == sizeof(reveal)) {
 			remoteAddress.sin_addr = senderAddr.sin_addr;
 			remoteAddress.sin_port = htons(reveal.tcpPort);
 			log("RemoteCaptury: discovered server at %s:%d\n", inet_ntoa(senderAddr.sin_addr), reveal.tcpPort);
