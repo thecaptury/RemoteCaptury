@@ -2237,7 +2237,7 @@ extern "C" int Captury_destroy(RemoteCaptury* rc)
 
 extern "C" int Captury_connect(RemoteCaptury* rc, const char* ip, unsigned short port)
 {
-	return rc->connect(ip, port, 0, 0, 0, INADDR_ANY, INADDR_ANY);
+	return rc->connect(ip, port, 0, 0, 0, "", "");
 }
 
 // returns 1 if successful, 0 otherwise
@@ -2276,7 +2276,7 @@ bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short 
 
 	if (ip == nullptr || *ip == '\0') {
 		if (multicastAddr == nullptr || *multicastAddr == '\0')
-			multicastAddr = "239.255.210.1";
+			multicastAddr = CAPTURY_MULTICAST_ADDR;
 		if (inet_pton(AF_INET, multicastAddr, &multicastAddress) <= 0) {
 			log("RemoteCaptury: cannot connect: failed to convert multicast address %s\n", multicastAddr);
 			return false;
@@ -2297,7 +2297,7 @@ bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short 
 		multiAddr.sin_port = htons(port+1);
 		multiAddr.sin_addr.s_addr = multicastAddress;
 		for (in_addr_t addr : localAddrs) {
-			setsockopt(discoverSock, IPPROTO_IP, IP_MULTICAST_IF, &addr, sizeof(addr));
+			setsockopt(discoverSock, IPPROTO_IP, IP_MULTICAST_IF, (const char*)&addr, sizeof(addr));
 			if (sendto(discoverSock, (const char*)&pkt, sizeof(pkt), 0, (const sockaddr*)&multiAddr, sizeof(multiAddr)) != sizeof(pkt)) {
 				unlockMutex(&connectMutex);
 				log("RemoteCaptury: cannot connect. failed to send discovery: %d: %s\n", errno, strerror(errno));
@@ -2309,7 +2309,7 @@ bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short 
 		CapturyRevealPacket reveal;
 		sockaddr_in senderAddr;
 		socklen_t addrSize = sizeof(senderAddr);
-		if (recvfrom(discoverSock, &reveal, sizeof(reveal), 0, (sockaddr*)&senderAddr, &addrSize) == sizeof(reveal)) {
+		if (recvfrom(discoverSock, (char*)&reveal, sizeof(reveal), 0, (sockaddr*)&senderAddr, &addrSize) == sizeof(reveal)) {
 			remoteAddress.sin_addr = senderAddr.sin_addr;
 			remoteAddress.sin_port = htons(reveal.tcpPort);
 			log("RemoteCaptury: discovered server at %s:%d\n", inet_ntoa(senderAddr.sin_addr), reveal.tcpPort);
