@@ -46,7 +46,10 @@
 #include <ws2tcpip.h>
 #include <ws2ipdef.h>
 #include <sysinfoapi.h>
+#include <iphlpapi.h>
+#pragma comment(lib, "iphlpapi.lib")
 #pragma comment(lib, "ws2_32.lib")
+typedef ULONG in_addr_t;
 #ifndef PRIu64
   #define PRIu64 "I64u"
 #endif
@@ -58,6 +61,7 @@
 #endif
 #else
 #include <unistd.h>
+#include <ifaddrs.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -260,6 +264,49 @@ static inline void unlockMutex(MutexStruct* mtx) RELEASE(mtx)
 // #define lockMutex(mtx)		printf("  locked %p at %d\n", mtx, __LINE__); (mtx)->lock()
 #endif
 
+void getInterfaceAddresses(std::vector<in_addr_t>& localAddresses)
+{
+#ifdef WIN32
+	ULONG flags = GAA_FLAG_INCLUDE_PREFIX;
+	ULONG outBufLen = 15000;
+	PIP_ADAPTER_ADDRESSES pAddresses = (IP_ADAPTER_ADDRESSES *)malloc(outBufLen);
+
+	// Resize buffer if initial 15KB estimate is insufficient
+	if (GetAdaptersAddresses(AF_INET, flags, NULL, pAddresses, &outBufLen) == ERROR_BUFFER_OVERFLOW) {
+		free(pAddresses);
+		pAddresses = (IP_ADAPTER_ADDRESSES *)malloc(outBufLen);
+	}
+
+	if (GetAdaptersAddresses(AF_INET, flags, NULL, pAddresses, &outBufLen) == NO_ERROR) {
+		for (PIP_ADAPTER_ADDRESSES pCurr = pAddresses; pCurr != NULL; pCurr = pCurr->Next) {
+			for (PIP_ADAPTER_UNICAST_ADDRESS pUnicast = pCurr->FirstUnicastAddress; pUnicast != NULL; pUnicast = pUnicast->Next) {
+				if (pUnicast->Address.lpSockaddr->sa_family == AF_INET) {
+					struct sockaddr_in *sa_in = (struct sockaddr_in *)pUnicast->Address.lpSockaddr;
+					// s_addr is stored in network byte order
+					localAddresses.push_back(sa_in->sin_addr.s_addr);
+				}
+			}
+		}
+	}
+	free(pAddresses);
+#else
+	struct ifaddrs *ifaddr = nullptr;
+	if (getifaddrs(&ifaddr) == -1)
+		return;
+
+	for (struct ifaddrs *ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next) {
+		// Skip null addresses and non-IPv4 families
+		if (ifa->ifa_addr == nullptr || ifa->ifa_addr->sa_family != AF_INET)
+			continue;
+
+		struct sockaddr_in *sa_in = (struct sockaddr_in *)ifa->ifa_addr;
+		// s_addr is stored in network byte order
+		localAddresses.push_back(sa_in->sin_addr.s_addr);
+	}
+
+	freeifaddrs(ifaddr);
+#endif
+}
 
 struct RemoteCaptury {
 	#ifdef _WIN32
@@ -2235,9 +2282,13 @@ bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short 
 			return false;
 		}
 		SOCKET discoverSock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-		setSocketTimeout(discoverSock, 300);
+		setSocketTimeout(discoverSock, 300); // wait 300ms for reply
+
+		std::vector<in_addr_t> localAddrs;
 		if (localStreamAddress.sin_addr.s_addr != INADDR_ANY)
-			setsockopt(discoverSock, IPPROTO_IP, IP_MULTICAST_IF, &localStreamAddress.sin_addr.s_addr, sizeof(localStreamAddress.sin_addr.s_addr));
+			localAddrs.push_back(localStreamAddress.sin_addr.s_addr);
+		else
+			getInterfaceAddresses(localAddrs);
 		CapturyRequestPacket pkt;
 		pkt.size = sizeof(pkt);
 		pkt.type = capturyDiscovery;
@@ -2245,10 +2296,13 @@ bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short 
 		multiAddr.sin_family = AF_INET;
 		multiAddr.sin_port = htons(port+1);
 		multiAddr.sin_addr.s_addr = multicastAddress;
-		if (sendto(discoverSock, (const char*)&pkt, sizeof(pkt), 0, (const sockaddr*)&multiAddr, sizeof(multiAddr)) != sizeof(pkt)) {
-			unlockMutex(&connectMutex);
-			log("RemoteCaptury: cannot connect. failed to send discovery: %d: %s\n", errno, strerror(errno));
-			return false;
+		for (in_addr_t addr : localAddrs) {
+			setsockopt(discoverSock, IPPROTO_IP, IP_MULTICAST_IF, &addr, sizeof(addr));
+			if (sendto(discoverSock, (const char*)&pkt, sizeof(pkt), 0, (const sockaddr*)&multiAddr, sizeof(multiAddr)) != sizeof(pkt)) {
+				unlockMutex(&connectMutex);
+				log("RemoteCaptury: cannot connect. failed to send discovery: %d: %s\n", errno, strerror(errno));
+				return false;
+			}
 		}
 		log("RemoteCaptury: %s discovering servers on %s:%d, sock=%d\n", async ? "async" : "blocking", multicastAddr, port+1, discoverSock);
 
