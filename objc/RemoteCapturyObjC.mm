@@ -464,6 +464,7 @@ static void objcBackgroundFinishedCallback(RemoteCaptury *rc, void *userData) {
 		Captury_destroy(_rcHandle);
 		_rcHandle = NULL;
 	}
+	[super dealloc];
 }
 
 #pragma mark - Connection
@@ -901,7 +902,7 @@ static void objcBackgroundFinishedCallback(RemoteCaptury *rc, void *userData) {
 	if (!msg)
 		return nil;
 	NSString *res = [NSString stringWithUTF8String:msg];
-	Captury_freeErrorMessage((char *)msg);
+	Captury_freeString((char *)msg);
 	return res;
 }
 

@@ -457,6 +457,7 @@ struct RemoteCaptury {
 	bool receive(std::vector<char>& buffer);
 	void deleteActors();
 
+	bool discoverServers(unsigned short port, const char* multicastAddress, std::vector<sockaddr_in>& serverAddresses);
 	bool connect(const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort, int async, const char* localAddress, const char* multicastAddress);
 	bool disconnect();
 	void safeCloseSocket();
@@ -2246,6 +2247,86 @@ extern "C" int Captury_connect2(RemoteCaptury* rc, const char* ip, unsigned shor
 	return rc->connect(ip, port, localPort, localStreamPort, async, localAddress, multicastAddress);
 }
 
+extern "C" int Captury_discoverServers(RemoteCaptury* rc, unsigned short port, const char* multicastAddress, char** serverNames)
+{
+	std::vector<sockaddr_in> serverAddresses;
+	if (rc->discoverServers(port, multicastAddress, serverAddresses)) {
+		*serverNames = new char[serverAddresses.size() * 22 + 1];
+		char* at = *serverNames;
+		for (int i = 0; i < serverAddresses.size(); ++i) {
+			int written = snprintf(at, 22, "%s:%d;", inet_ntoa(serverAddresses[i].sin_addr), ntohs(serverAddresses[i].sin_port));
+			at += written;
+		}
+		*at = '\0';
+		rc->log("Found servers: %s\n", *serverNames);
+		return (int)serverAddresses.size();
+	} else
+		return 0;
+}
+
+bool RemoteCaptury::discoverServers(unsigned short port, const char* multicastAddr, std::vector<sockaddr_in>& serverAddresses)
+{
+	if (port == 0)
+		port = 2101;
+	if (multicastAddr == nullptr || *multicastAddr == '\0')
+		multicastAddr = CAPTURY_MULTICAST_ADDR;
+	if (inet_pton(AF_INET, multicastAddr, &multicastAddress) <= 0) {
+		log("RemoteCaptury: cannot connect: failed to convert multicast address %s\n", multicastAddr);
+		return false;
+	}
+	SOCKET discoverSock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+	setSocketTimeout(discoverSock, 300); // wait 300ms for reply
+
+	std::vector<in_addr_t> localAddrs;
+	if (localStreamAddress.sin_addr.s_addr != INADDR_ANY)
+		localAddrs.push_back(localStreamAddress.sin_addr.s_addr);
+	else
+		getInterfaceAddresses(localAddrs);
+	CapturyRequestPacket pkt;
+	pkt.size = sizeof(pkt);
+	pkt.type = capturyDiscovery;
+	sockaddr_in multiAddr;
+	multiAddr.sin_family = AF_INET;
+	multiAddr.sin_port = htons(port+1);
+	multiAddr.sin_addr.s_addr = multicastAddress;
+	for (in_addr_t addr : localAddrs) {
+		#ifdef _WIN32
+		if (addr == ntohl(INADDR_LOOPBACK)) // windows doesn't like multicast on loopback
+			continue;
+		#endif
+		setsockopt(discoverSock, IPPROTO_IP, IP_MULTICAST_IF, (const char*)&addr, sizeof(addr));
+		if (sendto(discoverSock, (const char*)&pkt, sizeof(pkt), 0, (const sockaddr*)&multiAddr, sizeof(multiAddr)) != sizeof(pkt)) {
+			log("RemoteCaptury: cannot connect. failed to send discovery on interface %s: %s\n", inet_ntoa(*(in_addr*)&addr), sockstrerror());
+			#ifndef _WIN32
+			unlockMutex(&connectMutex);
+			return false;
+			#endif
+		}
+	}
+	log("RemoteCaptury: discovering servers on %s:%d, sock=%d\n", multicastAddr, port+1, discoverSock);
+
+	CapturyRevealPacket reveal;
+	sockaddr_in senderAddr;
+	socklen_t addrSize = sizeof(senderAddr);
+	if (recvfrom(discoverSock, (char*)&reveal, sizeof(reveal), 0, (sockaddr*)&senderAddr, &addrSize) == sizeof(reveal)) {
+		sockaddr_in addr;
+		addr.sin_family = AF_INET;
+		addr.sin_addr = senderAddr.sin_addr;
+		addr.sin_port = htons(reveal.tcpPort);
+		serverAddresses.push_back(addr);
+		log("RemoteCaptury: discovered server at %s:%d\n", inet_ntoa(senderAddr.sin_addr), reveal.tcpPort);
+	} else {
+		unlockMutex(&connectMutex);
+		closesocket(discoverSock);
+		log("RemoteCaptury: cannot connect. no server was discovered: %d: %s\n", errno, strerror(errno));
+		return false;
+	}
+
+	closesocket(discoverSock);
+	return true;
+}
+
+
 bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short localPort, unsigned short localStreamPort, int async, const char* localAddr, const char* multicastAddr)
 {
 #ifdef _WIN32
@@ -2281,58 +2362,10 @@ bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short 
 	remoteAddress.sin_family = AF_INET;
 
 	if (ip == nullptr || *ip == '\0') {
-		if (multicastAddr == nullptr || *multicastAddr == '\0')
-			multicastAddr = CAPTURY_MULTICAST_ADDR;
-		if (inet_pton(AF_INET, multicastAddr, &multicastAddress) <= 0) {
-			log("RemoteCaptury: cannot connect: failed to convert multicast address %s\n", multicastAddr);
+		std::vector<sockaddr_in> serverAddresses;
+		if (!discoverServers(port, multicastAddr, serverAddresses))
 			return false;
-		}
-		SOCKET discoverSock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-		setSocketTimeout(discoverSock, 300); // wait 300ms for reply
-
-		std::vector<in_addr_t> localAddrs;
-		if (localStreamAddress.sin_addr.s_addr != INADDR_ANY)
-			localAddrs.push_back(localStreamAddress.sin_addr.s_addr);
-		else
-			getInterfaceAddresses(localAddrs);
-		CapturyRequestPacket pkt;
-		pkt.size = sizeof(pkt);
-		pkt.type = capturyDiscovery;
-		sockaddr_in multiAddr;
-		multiAddr.sin_family = AF_INET;
-		multiAddr.sin_port = htons(port+1);
-		multiAddr.sin_addr.s_addr = multicastAddress;
-		for (in_addr_t addr : localAddrs) {
-			#ifdef _WIN32
-			if (addr == ntohl(INADDR_LOOPBACK)) // windows doesn't like multicast on loopback
-				continue;
-			#endif
-			setsockopt(discoverSock, IPPROTO_IP, IP_MULTICAST_IF, (const char*)&addr, sizeof(addr));
-			if (sendto(discoverSock, (const char*)&pkt, sizeof(pkt), 0, (const sockaddr*)&multiAddr, sizeof(multiAddr)) != sizeof(pkt)) {
-				log("RemoteCaptury: cannot connect. failed to send discovery on interface %s: %s\n", inet_ntoa(*(in_addr*)&addr), sockstrerror());
-				#ifndef _WIN32
-				unlockMutex(&connectMutex);
-				return false;
-				#endif
-			}
-		}
-		log("RemoteCaptury: %s discovering servers on %s:%d, sock=%d\n", async ? "async" : "blocking", multicastAddr, port+1, discoverSock);
-
-		CapturyRevealPacket reveal;
-		sockaddr_in senderAddr;
-		socklen_t addrSize = sizeof(senderAddr);
-		if (recvfrom(discoverSock, (char*)&reveal, sizeof(reveal), 0, (sockaddr*)&senderAddr, &addrSize) == sizeof(reveal)) {
-			remoteAddress.sin_addr = senderAddr.sin_addr;
-			remoteAddress.sin_port = htons(reveal.tcpPort);
-			log("RemoteCaptury: discovered server at %s:%d\n", inet_ntoa(senderAddr.sin_addr), reveal.tcpPort);
-		} else {
-			unlockMutex(&connectMutex);
-			closesocket(discoverSock);
-			log("RemoteCaptury: cannot connect. no server was discovered: %d: %s\n", errno, strerror(errno));
-			return false;
-		}
-
-		closesocket(discoverSock);
+		remoteAddress = serverAddresses[0];
 	} else {
 		struct in_addr addr;
 		#ifdef _WIN32
@@ -2571,9 +2604,9 @@ char* Captury_getLastErrorMessage(RemoteCaptury* rc)
 	return msg;
 }
 
-void Captury_freeErrorMessage(char* msg)
+void Captury_freeString(char* str)
 {
-	delete[] msg;
+	delete[] str;
 }
 
 

@@ -25,6 +25,13 @@ CAPTURY_DLL_EXPORT RemoteCaptury* Captury_create();
 // destroy the RemoteCaptury object handle
 CAPTURY_DLL_EXPORT int Captury_destroy(RemoteCaptury* rc);
 
+// returns the number of discovered servers
+// port = 0 uses default port 2101
+// multicastAddress = NULL or "" uses "239.255.210.1"
+// remoteAddresses will contain the IP addresses of the discovered servers <ip>:<port>;<ip2>:<port2>;...
+// use Captury_freeString() to free the returned string
+CAPTURY_DLL_EXPORT int Captury_discoverServers(RemoteCaptury* rc, unsigned short port, const char* multicastAddress, char** serverNames);
+
 // returns 1 if successful, 0 otherwise
 // the default port is 2101
 CAPTURY_DLL_EXPORT int Captury_connect(RemoteCaptury* rc, const char* ip, unsigned short port);
@@ -275,8 +282,9 @@ CAPTURY_DLL_EXPORT void Captury_getFramerate(RemoteCaptury* rc, int* numerator, 
 
 // get the last error message
 CAPTURY_DLL_EXPORT char* Captury_getLastErrorMessage(RemoteCaptury* rc);
-CAPTURY_DLL_EXPORT void Captury_freeErrorMessage(char* msg);
 
+// free a string returned by any Captury function
+CAPTURY_DLL_EXPORT void Captury_freeString(char* str);
 
 
 // tries to snap an actor at the specified location
