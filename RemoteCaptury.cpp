@@ -2257,6 +2257,11 @@ bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short 
 		InitializeCriticalSection(&connectMutex);
 		mutexesInited = true;
 	}
+	if (!wsaInited) {
+		WSADATA init;
+		WSAStartup(WINSOCK_VERSION, &init);
+		wsaInited = true;
+	}
 #endif
 	lockMutex(&connectMutex);
 
@@ -2298,11 +2303,17 @@ bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short 
 		multiAddr.sin_port = htons(port+1);
 		multiAddr.sin_addr.s_addr = multicastAddress;
 		for (in_addr_t addr : localAddrs) {
+			#ifdef _WIN32
+			if (addr == ntohl(INADDR_LOOPBACK)) // windows doesn't like multicast on loopback
+				continue;
+			#endif
 			setsockopt(discoverSock, IPPROTO_IP, IP_MULTICAST_IF, (const char*)&addr, sizeof(addr));
 			if (sendto(discoverSock, (const char*)&pkt, sizeof(pkt), 0, (const sockaddr*)&multiAddr, sizeof(multiAddr)) != sizeof(pkt)) {
+				log("RemoteCaptury: cannot connect. failed to send discovery on interface %s: %s\n", inet_ntoa(*(in_addr*)&addr), sockstrerror());
+				#ifndef _WIN32
 				unlockMutex(&connectMutex);
-				log("RemoteCaptury: cannot connect. failed to send discovery: %d: %s\n", errno, strerror(errno));
 				return false;
+				#endif
 			}
 		}
 		log("RemoteCaptury: %s discovering servers on %s:%d, sock=%d\n", async ? "async" : "blocking", multicastAddr, port+1, discoverSock);
