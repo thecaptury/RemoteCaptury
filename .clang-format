@@ -1,0 +1,14 @@
+---
+BasedOnStyle: LLVM
+UseTab: Always
+IndentWidth: 8
+TabWidth: 8
+ColumnLimit: 0
+AllowShortIfStatementsOnASingleLine: false
+AllowShortBlocksOnASingleLine: false
+AllowShortFunctionsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+IndentCaseBlocks: false
+IndentCaseLabels: false
+ObjCBlockIndentWidth: 8
+...
