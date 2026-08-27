@@ -320,11 +320,11 @@ struct RemoteCaptury {
 	CRITICAL_SECTION	connectMutex;
 	bool mutexesInited = false;
 	#else
-	pthread_t	streamThread;
+	pthread_t	streamThread = (pthread_t)-1;
 	std::atomic_flag streamThreadJoined = ATOMIC_FLAG_INIT;
-	pthread_t	receiveThread;
+	pthread_t	receiveThread = (pthread_t)-1;
 	std::atomic_flag receiveThreadJoined = ATOMIC_FLAG_INIT;
-	pthread_t	syncThread;
+	pthread_t	syncThread = (pthread_t)-1;
 	MutexStruct	mutex;
 	MutexStruct	partialActorMutex;
 	MutexStruct	syncMutex;
@@ -1764,7 +1764,7 @@ void* RemoteCaptury::receiveLoop()
 					}
 					#else
 					void* retVal;
-					if (!streamThreadJoined.test_and_set()) {
+					if (!streamThreadJoined.test_and_set() && streamThread != (pthread_t)-1) {
 						pthread_join(streamThread, &retVal);
 					}
 					#endif
@@ -2268,8 +2268,9 @@ bool RemoteCaptury::connect(const char* ip, unsigned short port, unsigned short 
 	localAddress.sin_port = htons(localPort);
 
 	localStreamAddress.sin_family = AF_INET;
-	if (localAddr && *localAddr && inet_pton(AF_INET, localAddr, &localStreamAddress.sin_addr.s_addr) <= 0)
-		localStreamAddress.sin_addr.s_addr = INADDR_ANY;
+	localStreamAddress.sin_addr.s_addr = INADDR_ANY;
+	if (localAddr && *localAddr)
+		inet_pton(AF_INET, localAddr, &localStreamAddress.sin_addr.s_addr);
 	localStreamAddress.sin_port = htons(localStreamPort);
 
 	remoteAddress.sin_family = AF_INET;
@@ -2405,10 +2406,10 @@ bool RemoteCaptury::disconnect()
 
 		#else
 		void* retVal;
-		if (!receiveThreadJoined.test_and_set()) {
+		if (!receiveThreadJoined.test_and_set() && receiveThread != (pthread_t)-1) {
 			pthread_join(receiveThread, &retVal);
 		}
-		if (!streamThreadJoined.test_and_set()) {
+		if (!streamThreadJoined.test_and_set() && streamThread != (pthread_t)-1) {
 			pthread_join(streamThread, &retVal);
 		}
 		#endif
@@ -2561,7 +2562,7 @@ char* Captury_getLastErrorMessage(RemoteCaptury* rc)
 
 void Captury_freeErrorMessage(char* msg)
 {
-	free(msg);
+	delete[] msg;
 }
 
 
@@ -2659,7 +2660,7 @@ extern "C" int Captury_stopStreaming(RemoteCaptury* rc, int wait)
 		}
 #else
 		void* retVal;
-		if (!rc->streamThreadJoined.test_and_set()) {
+		if (!rc->streamThreadJoined.test_and_set() && rc->streamThread != (pthread_t)-1) {
 			pthread_join(rc->streamThread, &retVal);
 		}
 #endif
@@ -2881,11 +2882,13 @@ extern "C" CapturyImage* Captury_getTexture(RemoteCaptury* rc, int actorId)
 	return image;
 }
 
-// simple function for releasing memory of an image
 extern "C" void Captury_freeImage(CapturyImage* image)
 {
-	if (image != NULL)
+	if (image != NULL) {
+		if (image->data != nullptr && image->data != (unsigned char*)&image[1])
+			free(image->data);
 		free(image);
+	}
 }
 
 
@@ -3528,6 +3531,36 @@ extern "C" int Captury_getCurrentLatency(RemoteCaptury* rc, CapturyLatencyInfo* 
 	latencyInfo->timestampOfCorrespondingPose = rc->receivedPoseTimestamp;
 
 	return 1;
+}
+
+extern "C" CapturyImage* Captury_getCurrentImage(RemoteCaptury* rc)
+{
+	if (rc == nullptr || rc->sock == -1)
+		return nullptr;
+
+	lockMutex(&rc->mutex);
+	if (rc->currentImagesDone.empty()) {
+		unlockMutex(&rc->mutex);
+		return nullptr;
+	}
+
+	auto it = rc->currentImagesDone.begin();
+	CapturyImage* img = (CapturyImage*)malloc(sizeof(CapturyImage));
+	if (!img) {
+		unlockMutex(&rc->mutex);
+		return nullptr;
+	}
+
+	*img = it->second;
+	if (it->second.data != nullptr && it->second.width > 0 && it->second.height > 0) {
+		size_t dataSize = (size_t)it->second.width * it->second.height * 3;
+		img->data = (unsigned char*)malloc(dataSize);
+		if (img->data)
+			memcpy(img->data, it->second.data, dataSize);
+	}
+
+	unlockMutex(&rc->mutex);
+	return img;
 }
 
 #endif
