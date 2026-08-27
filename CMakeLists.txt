@@ -82,4 +82,52 @@ add_executable(SearchExample examples/search.cpp)
 target_include_directories(SearchExample PRIVATE ".")
 target_link_libraries(SearchExample RemoteCapturyStatic Threads::Threads)
 
-add_custom_target(Examples DEPENDS PollingExample CallbackExample CurvesExample SearchExample)
+#
+# Objective-C wrapper target
+#
+find_program(GNUSTEP_CONFIG gnustep-config)
+if (GNUSTEP_CONFIG)
+	execute_process(COMMAND ${GNUSTEP_CONFIG} --objc-flags OUTPUT_VARIABLE GNUSTEP_OBJC_FLAGS OUTPUT_STRIP_TRAILING_WHITESPACE)
+	execute_process(COMMAND ${GNUSTEP_CONFIG} --base-libs OUTPUT_VARIABLE GNUSTEP_BASE_LIBS OUTPUT_STRIP_TRAILING_WHITESPACE)
+	set(GNUSTEP_FOUND TRUE)
+endif ()
+
+if (APPLE)
+	enable_language(OBJCXX)
+	enable_language(OBJC)
+	add_library(RemoteCapturyObjC SHARED objc/RemoteCapturyObjC.mm RemoteCaptury.cpp)
+	target_include_directories(RemoteCapturyObjC PUBLIC "." "objc")
+	target_link_libraries(RemoteCapturyObjC "-framework Foundation")
+
+	add_executable(ObjCExample examples/objc_example.m)
+	target_include_directories(ObjCExample PRIVATE "." "objc")
+	target_link_libraries(ObjCExample RemoteCapturyObjC "-framework Foundation")
+
+	add_custom_target(Examples DEPENDS PollingExample CallbackExample CurvesExample SearchExample ObjCExample)
+elseif (GNUSTEP_FOUND)
+	enable_language(OBJCXX)
+	enable_language(OBJC)
+	file(GLOB GCC_OBJC_INC "/usr/lib/gcc/*/*/include")
+
+	# Create a temporary include wrapper directory for objc/blocks_runtime.h if using libblocksruntime
+	set(OBJC_BLOCKS_WRAPPER_DIR "${CMAKE_CURRENT_BINARY_DIR}/objc_blocks_wrapper")
+	file(MAKE_DIRECTORY "${OBJC_BLOCKS_WRAPPER_DIR}/objc")
+	file(WRITE "${OBJC_BLOCKS_WRAPPER_DIR}/objc/blocks_runtime.h" "#include <Block.h>\n")
+
+	add_library(RemoteCapturyObjC SHARED objc/RemoteCapturyObjC.mm RemoteCaptury.cpp)
+	target_include_directories(RemoteCapturyObjC PUBLIC "." "objc" ${GCC_OBJC_INC} "${OBJC_BLOCKS_WRAPPER_DIR}")
+	separate_arguments(GNUSTEP_OBJC_FLAGS_LIST NATIVE_COMMAND "${GNUSTEP_OBJC_FLAGS}")
+	separate_arguments(GNUSTEP_BASE_LIBS_LIST NATIVE_COMMAND "${GNUSTEP_BASE_LIBS}")
+	target_compile_options(RemoteCapturyObjC PRIVATE $<$<COMPILE_LANGUAGE:OBJC,OBJCXX>:${GNUSTEP_OBJC_FLAGS_LIST}> $<$<COMPILE_LANGUAGE:OBJC,OBJCXX>:-fblocks>)
+	target_link_libraries(RemoteCapturyObjC ${GNUSTEP_BASE_LIBS_LIST} objc BlocksRuntime)
+
+	add_executable(ObjCExample examples/objc_example.m)
+	set_source_files_properties(examples/objc_example.m PROPERTIES LANGUAGE OBJCXX)
+	target_include_directories(ObjCExample PRIVATE "." "objc" ${GCC_OBJC_INC} "${OBJC_BLOCKS_WRAPPER_DIR}")
+	target_compile_options(ObjCExample PRIVATE $<$<COMPILE_LANGUAGE:OBJC,OBJCXX>:${GNUSTEP_OBJC_FLAGS_LIST}> $<$<COMPILE_LANGUAGE:OBJC,OBJCXX>:-fblocks>)
+	target_link_libraries(ObjCExample RemoteCapturyObjC ${GNUSTEP_BASE_LIBS_LIST} objc BlocksRuntime)
+
+	add_custom_target(Examples DEPENDS PollingExample CallbackExample CurvesExample SearchExample ObjCExample)
+else ()
+	add_custom_target(Examples DEPENDS PollingExample CallbackExample CurvesExample SearchExample)
+endif ()
