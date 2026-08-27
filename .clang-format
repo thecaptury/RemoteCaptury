@@ -11,4 +11,5 @@ AllowShortLoopsOnASingleLine: false
 IndentCaseBlocks: false
 IndentCaseLabels: false
 ObjCBlockIndentWidth: 8
+BreakBeforeBraces: BS_Linux
 ...
