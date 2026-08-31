@@ -5,8 +5,9 @@ set -e
 
 echo "Copying C++ source files from parent directory..."
 
-# Copy C++ files
 mkdir -p src/
+
+# Copy C++ files
 cp ../RemoteCaptury.cpp src/
 cp ../RemoteCaptury.h src/
 cp ../RemoteCapturyPython.cpp src/

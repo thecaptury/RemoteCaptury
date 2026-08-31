@@ -57,12 +57,15 @@ jobs:
     
     - name: Prepare build (copy C++ sources) - Windows
       if: runner.os == 'Windows'
+      shell: pwsh
       run: |
         cd python
-        Copy-Item ..\RemoteCaptury.cpp src\
-        Copy-Item ..\RemoteCaptury.h src\
-        Copy-Item ..\captury src\ -Recurse
-      shell: pwsh
+        $srcDir = Join-Path $PWD 'src'
+        if (-not (Test-Path $srcDir)) {
+          New-Item -Path $srcDir -ItemType Directory -Force | Out-Null
+        }
+        Copy-Item ..\RemoteCaptury.cpp, ..\RemoteCaptury.h, ..\RemoteCapturyPython.cpp, ..\RemoteCapturyPython.h -Destination $srcDir -Force
+        Copy-Item ..\captury -Destination $srcDir -Recurse -Force
     
     - name: Build wheels
       uses: pypa/cibuildwheel@v2.21
