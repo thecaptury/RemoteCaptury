@@ -1,9 +1,17 @@
+import re
+from pathlib import Path
 from setuptools import setup, Extension, find_packages
-import os
+
+ROOT = Path(__file__).resolve().parent
+text = (ROOT / 'remotecaptury' / '__init__.py').read_text(encoding='utf-8')
+match = re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']', text, re.MULTILINE)
+if match is None:
+    raise RuntimeError('Could not determine package version from remotecaptury/__init__.py')
+package_version = match.group(1)
 
 # Define the extension module
 sources = [
-    'src/bindings.cpp',
+    'src/RemoteCapturyPython.cpp',
     'src/RemoteCaptury.cpp'
 ]
 
@@ -14,9 +22,11 @@ module1 = Extension('_remotecaptury',
                     )
 
 setup(name='remotecaptury',
-      version='1.0.0',
+      version=package_version,
       description='Python wrapper for RemoteCaptury',
       author='Captury',
+      license='BSD-2-Clause',
+      python_requires='>=3.6',
       packages=find_packages(),
       ext_modules=[module1],
       zip_safe=False)

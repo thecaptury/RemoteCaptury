@@ -35,7 +35,7 @@ if (TARGET Python3::Python)
 	set_target_properties(RemoteCapturyPython
 		PROPERTIES
 			PREFIX ""
-			OUTPUT_NAME "remotecaptury"
+			OUTPUT_NAME "_remotecaptury"
 			LINKER_LANGUAGE C
 	)
 	if (WIN32)
@@ -50,6 +50,16 @@ if (TARGET Python3::Python)
 				SUFFIX ".so"
 		)
 	endif ()
+
+	# Keep a compatibility copy with the old module name for legacy scripts. The
+	# package directory is named remotecaptury, so the canonical backend name must
+	# avoid colliding with the package import path.
+	add_custom_command(TARGET RemoteCapturyPython POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different
+			$<TARGET_FILE:RemoteCapturyPython>
+			${CMAKE_CURRENT_BINARY_DIR}/remotecaptury${CMAKE_SHARED_LIBRARY_SUFFIX}
+	)
+	configure_file(${CMAKE_CURRENT_SOURCE_DIR}/python/sitecustomize.py ${CMAKE_CURRENT_BINARY_DIR}/sitecustomize.py COPYONLY)
 endif (TARGET Python3::Python)
 
 if (ANDROID_NDK_FOUND)

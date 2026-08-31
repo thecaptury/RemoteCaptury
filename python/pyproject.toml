@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "remotecaptury"
-version = "1.0.0"
+dynamic = ["version"]
 description = "Python wrapper for RemoteCaptury - stream motion capture data from CapturyLive"
 readme = "README.md"
 requires-python = ">=3.6"
-license = {text = "Proprietary"}
+license = {text = "BSD-2-Clause"}
 authors = [
     {name = "The Captury", email = "info@thecaptury.com"}
 ]
@@ -27,6 +27,8 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
     "Programming Language :: C++",
 ]
 
@@ -34,3 +36,6 @@ classifiers = [
 Homepage = "https://thecaptury.com"
 Documentation = "https://github.com/thecaptury/RemoteCaptury"
 Repository = "https://github.com/thecaptury/RemoteCaptury"
+
+[tool.setuptools.dynamic]
+version = {attr = "remotecaptury.__version__"}

@@ -1,1 +1,3 @@
 build
+python/src/RemoteCapturyPython.cpp
+python/src/RemoteCapturyPython.h

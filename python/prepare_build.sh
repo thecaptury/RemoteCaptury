@@ -8,6 +8,8 @@ echo "Copying C++ source files from parent directory..."
 # Copy C++ files
 cp ../RemoteCaptury.cpp src/
 cp ../RemoteCaptury.h src/
+cp ../RemoteCapturyPython.cpp src/
+cp ../RemoteCapturyPython.h src/
 
 # Copy captury directory
 cp -r ../captury src/

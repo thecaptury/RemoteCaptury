@@ -1,4 +1,5 @@
 include src/RemoteCaptury.h
 include src/RemoteCaptury.cpp
-include src/bindings.cpp
+include src/RemoteCapturyPython.h
+include src/RemoteCapturyPython.cpp
 recursive-include src/captury *.h
