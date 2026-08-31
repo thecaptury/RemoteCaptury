@@ -2253,7 +2253,7 @@ extern "C" int Captury_discoverServers(RemoteCaptury* rc, unsigned short port, c
 	if (rc->discoverServers(port, multicastAddress, serverAddresses)) {
 		*serverNames = new char[serverAddresses.size() * 22 + 1];
 		char* at = *serverNames;
-		for (int i = 0; i < serverAddresses.size(); ++i) {
+		for (int i = 0; i < (int)serverAddresses.size(); ++i) {
 			int written = snprintf(at, 22, "%s:%d;", inet_ntoa(serverAddresses[i].sin_addr), ntohs(serverAddresses[i].sin_port));
 			at += written;
 		}
