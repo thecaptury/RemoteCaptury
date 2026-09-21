@@ -462,6 +462,8 @@ struct RemoteCaptury {
 	bool disconnect();
 	void safeCloseSocket();
 
+	void receiveImage(CapturyImageDataPacket* cip);
+
 	int startStreamingImagesAndAngles(int what, int32_t camId, int numAngles, uint16_t* angles);
 	CapturyPose* getCurrentPoseAndTrackingConsistencyForActor(int actorId, int* tc);
 };
@@ -1674,6 +1676,9 @@ bool RemoteCaptury::receive(std::vector<char>& buffer)
 			break; }
 		case capturyReveal:
 			break;
+		case capturyStreamedImageData:
+			receiveImage((CapturyImageDataPacket*)buffer.data());
+			break;
 		case capturyStreamAck:
 		case capturySetShotAck:
 		case capturyStartRecordingAck:
@@ -1798,6 +1803,64 @@ bool RemoteCaptury::sendPacket(CapturyRequestPacket* packet, CapturyPacketTypes 
 		return false;
 
 	return true;
+}
+
+void RemoteCaptury::receiveImage(CapturyImageDataPacket* cip)
+{
+	// check if we have a texture already
+	std::map<int, CapturyImage>::iterator it = currentImages.find(cip->actor);
+	if (it == currentImages.end()) {
+		log("received image data for camera %d without having received image header\n", cip->actor);
+		return;
+	}
+
+	// log("received image data from %d.%zd %dx%d offset %d\n", cip->actor, it->second.timestamp, it->second.width, it->second.height, cip->offset);
+
+	// copy data from packet into the buffer
+	lockMutex(&mutex);
+	const int imgSize = it->second.width * it->second.height * 3;
+
+	// check if packet fits
+	if (cip->offset >= imgSize || cip->offset + cip->size-16 > imgSize) {
+		unlockMutex(&mutex);
+		log("received image data for camera %d (%d-%d) that is larger than header (%dx%d*3 = %d)\n", cip->actor, cip->offset, cip->offset+cip->size-16, it->second.width, it->second.height, imgSize);
+		return;
+	}
+
+	bool finished = false;
+
+	// mark packet as received
+	std::vector<int>& recvd = currentImagesReceivedPackets[cip->actor];
+	const uint packetIndex = (cip->offset + cip->size-16 == imgSize) ? recvd.size()-1 : cip->offset / (cip->size-16);
+	if (packetIndex >= recvd.size()) {
+		log("received invalid packet index (%d) for camera %d\n", packetIndex, cip->actor);
+		return;
+	}
+
+	recvd[packetIndex] = 1;
+	++recvd[recvd.size()-1];
+
+	// copy data
+	memcpy(it->second.data + cip->offset, cip->data, cip->size-16);
+
+	if (recvd[recvd.size()-1] == (int)recvd.size()-2) { // done
+		auto done = currentImagesDone.find(cip->actor);
+		if (done == currentImagesDone.end()) {
+			currentImagesDone[cip->actor].camera = it->second.camera;
+			currentImagesDone[cip->actor].data = (unsigned char*)malloc(it->second.width*it->second.height*3);
+			done = currentImagesDone.find(cip->actor);
+		}
+		done->second.width = it->second.width;
+		done->second.height = it->second.height;
+		done->second.timestamp = it->second.timestamp;
+		std::swap(done->second.data, it->second.data);
+		std::fill(recvd.begin(), recvd.end(), 0);
+		finished = true;
+	}
+	unlockMutex(&mutex);
+
+	if (finished && imageCallback)
+		imageCallback(this, &currentImagesDone[cip->actor], imageArg);
 }
 
 #ifdef _WIN32
@@ -2000,12 +2063,13 @@ void* RemoteCaptury::streamLoop(CapturyStreamPacketTcp* packet)
 			lockMutex(&mutex);
 			if (currentImages.count(tp->actor) == 0) {
 				currentImages[tp->actor].camera = tp->actor;
-				currentImages[tp->actor].width = tp->width;
-				currentImages[tp->actor].height = tp->height;
-				currentImages[tp->actor].timestamp = 0;
 				currentImages[tp->actor].data = (unsigned char*)malloc(tp->width*tp->height*3);
 			} else if (currentImages[tp->actor].width != tp->width || currentImages[tp->actor].height != tp->height)
 				currentImages[tp->actor].data = (unsigned char*)realloc(currentImages[tp->actor].data, tp->width*tp->height*3);
+			currentImages[tp->actor].timestamp = tp->timestamp;
+			currentImages[tp->actor].width = tp->width;
+			currentImages[tp->actor].height = tp->height;
+			// log("received image header from %d.%zd %dx%d\n", tp->actor, tp->timestamp, tp->width, tp->height);
 
 			currentImagesReceivedPackets[tp->actor] = std::vector<int>( ((tp->width*tp->height*3 + tp->dataPacketSize-16-1) / (tp->dataPacketSize-16)) + 1, 0);
 			unlockMutex(&mutex);
@@ -2025,71 +2089,7 @@ void* RemoteCaptury::streamLoop(CapturyStreamPacketTcp* packet)
 
 		if (cpp->type == capturyStreamedImageData) {
 			// received data for the image
-			CapturyImageDataPacket* cip = (CapturyImageDataPacket*)buffer.data();
-//			log("received image data for camera %d (payload %d bytes)\n", cip->actor, cip->size-16);
-
-			// check if we have a texture already
-			std::map<int, CapturyImage>::iterator it = currentImages.find(cip->actor);
-			if (it == currentImages.end()) {
-				log("received image data for camera %d without having received image header\n", cip->actor);
-				continue;
-			}
-
-			// copy data from packet into the buffer
-			lockMutex(&mutex);
-			const int imgSize = it->second.width * it->second.height * 3;
-
-			// check if packet fits
-			if (cip->offset >= imgSize || cip->offset + cip->size-16 > imgSize) {
-				unlockMutex(&mutex);
-				log("received image data for camera %d (%d-%d) that is larger than header (%dx%d*3 = %d)\n", cip->actor, cip->offset, cip->offset+cip->size-16, it->second.width, it->second.height, imgSize);
-				continue;
-			}
-
-			bool finished = false;
-
-			// mark paket as received
-			const int packetIndex = cip->offset / (cip->size-16);
-			std::vector<int>& recvd = currentImagesReceivedPackets[cip->actor];
-			if (recvd[packetIndex] == 1) { // copying image to done although it is not quite finished
-				auto done = currentImagesDone.find(cip->actor);
-				if (done == currentImagesDone.end()) {
-					currentImagesDone[cip->actor].camera = it->second.camera;
-					currentImagesDone[cip->actor].data = (unsigned char*)malloc(it->second.width*it->second.height*3);
-					done = currentImagesDone.find(cip->actor);
-				}
-				done->second.width = it->second.width;
-				done->second.height = it->second.height;
-				done->second.timestamp = it->second.timestamp;
-				std::swap(done->second.data, it->second.data);
-				std::fill(recvd.begin(), recvd.end(), 0);
-				finished = true;
-			}
-			recvd[packetIndex] = 1;
-			++recvd[recvd.size()-1];
-
-			// copy data
-			memcpy(it->second.data + cip->offset, cip->data, cip->size-16);
-
-			if (recvd[recvd.size()-1] == (int)recvd.size()-2) { // done
-				auto done = currentImagesDone.find(cip->actor);
-				if (done == currentImagesDone.end()) {
-					currentImagesDone[cip->actor].camera = it->second.camera;
-					currentImagesDone[cip->actor].data = (unsigned char*)malloc(it->second.width*it->second.height*3);
-					done = currentImagesDone.find(cip->actor);
-				}
-				done->second.width = it->second.width;
-				done->second.height = it->second.height;
-				done->second.timestamp = it->second.timestamp;
-				std::swap(done->second.data, it->second.data);
-				std::fill(recvd.begin(), recvd.end(), 0);
-				finished = true;
-			}
-			unlockMutex(&mutex);
-
-			if (finished && imageCallback)
-				imageCallback(this, &currentImagesDone[cip->actor], imageArg);
-
+			receiveImage((CapturyImageDataPacket*)buffer.data());
 			continue;
 		}
 

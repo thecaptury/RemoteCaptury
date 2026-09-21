@@ -8,10 +8,12 @@
   #pragma warning( disable : 4200 ) // nonstandard extension used: zero-sized array in struct/union
 #endif
 
-#ifdef _WIN32
-  #define CAPTURY_DLL_EXPORT __declspec(dllexport)
-#else
-  #define CAPTURY_DLL_EXPORT
+#ifndef CAPTURY_DLL_EXPORT
+  #ifdef _WIN32
+    #define CAPTURY_DLL_EXPORT __declspec(dllexport)
+  #else
+    #define CAPTURY_DLL_EXPORT __attribute__ ((visibility("default")))
+  #endif
 #endif
 
 #ifdef __cplusplus
