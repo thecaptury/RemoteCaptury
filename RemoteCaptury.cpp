@@ -81,7 +81,7 @@ typedef uint32_t uint;
   #define ACQUIRE(...)
   #define RELEASE(...)
 #else
-  #if _MSC_VER
+  #if defined(_MSC_VER)
     #define CAPABILITY(x)
     #define GUARDED_BY(x)
     #define GUARDED_BY_MSVC(x)	_Guarded_by_(x)
