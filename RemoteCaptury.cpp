@@ -29,44 +29,48 @@
 #pragma warning( disable : 4267 ) // 'var' : conversion from 'size_t' to 'type', possible loss of data
 #pragma warning( disable : 4996 ) // don't show "deprecated" warnings
 
-// #define MAXIMUM(a, b) ((a) > (b) ? (a) : (b))
+#ifdef __UNREAL__
+  #include "SocketSubsystem.h"
+  #include "IPAddress.h"
+#endif
+
 #ifdef _WIN32
-#undef max
-#undef min
-#ifndef _CRT_SECURE_NO_WARNINGS
-	#define _CRT_SECURE_NO_WARNINGS
-#endif
-#define _WIN32_WINNT_WINTHRESHOLD 0
-#define _APISET_RTLSUPPORT_VER 0
-#define _APISET_INTERLOCKED_VER 0
-#define _APISET_SECURITYBASE_VER 0
-#define NTDDI_WIN7SP1 0
-#define snprintf _snprintf
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#include <ws2ipdef.h>
-#include <sysinfoapi.h>
-#include <iphlpapi.h>
-#pragma comment(lib, "iphlpapi.lib")
-#pragma comment(lib, "ws2_32.lib")
-typedef ULONG in_addr_t;
-#ifndef PRIu64
-  #define PRIu64 "I64u"
-#endif
-#ifndef PRId64
-  #define PRId64 "I64d"
-#endif
-#ifndef SYSTEM_INFO
-  #include <chrono>
-#endif
+  #undef max
+  #undef min
+  #ifndef _CRT_SECURE_NO_WARNINGS
+    #define _CRT_SECURE_NO_WARNINGS
+  #endif
+  #define _WIN32_WINNT_WINTHRESHOLD 0
+  #define _APISET_RTLSUPPORT_VER 0
+  #define _APISET_INTERLOCKED_VER 0
+  #define _APISET_SECURITYBASE_VER 0
+  #define NTDDI_WIN7SP1 0
+  #define snprintf _snprintf
+  #include <winsock2.h>
+  #include <ws2tcpip.h>
+  #include <ws2ipdef.h>
+  #include <sysinfoapi.h>
+  #include <iphlpapi.h>
+  #pragma comment(lib, "iphlpapi.lib")
+  #pragma comment(lib, "ws2_32.lib")
+  typedef ULONG in_addr_t;
+  #ifndef PRIu64
+    #define PRIu64 "I64u"
+  #endif
+  #ifndef PRId64
+    #define PRId64 "I64d"
+  #endif
+  #ifndef SYSTEM_INFO
+    #include <chrono>
+  #endif
 #else
-#include <unistd.h>
-#include <ifaddrs.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <pthread.h>
-#include <errno.h>
+  #include <unistd.h>
+  #include <ifaddrs.h>
+  #include <sys/socket.h>
+  #include <netinet/in.h>
+  #include <arpa/inet.h>
+  #include <pthread.h>
+  #include <errno.h>
 #endif
 
 #include <stdarg.h>
@@ -266,7 +270,21 @@ static inline void unlockMutex(MutexStruct* mtx) RELEASE(mtx)
 
 void getInterfaceAddresses(std::vector<in_addr_t>& localAddresses)
 {
-#ifdef WIN32
+#if defined __UNREAL__
+	ISocketSubsystem* socketSubsystem = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
+	if (socketSubsystem) {
+		TArray<TSharedPtr<FInternetAddr>> addresses;
+		if (socketSubsystem->GetLocalAdapterAddresses(addresses)) {
+			for (const TSharedPtr<FInternetAddr>& addr : addresses) {
+				if (addr.IsValid() && addr->GetProtocolType() == FNetworkProtocolTypes::IPv4) {
+					uint32 hostOrderIp = 0;
+					addr->GetIp(hostOrderIp);
+					localAddresses.push_back(htonl(hostOrderIp)); // Convert to network byte order to match s_addr
+				}
+			}
+		}
+	}
+#elif defined(_WIN32)
 	ULONG flags = GAA_FLAG_INCLUDE_PREFIX;
 	ULONG outBufLen = 15000;
 	PIP_ADAPTER_ADDRESSES pAddresses = (IP_ADAPTER_ADDRESSES *)malloc(outBufLen);
